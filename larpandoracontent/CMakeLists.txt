@@ -3,6 +3,7 @@ set( subdir_list LArCheating
 		 LArCustomParticles
 		 LArHelpers
 		 LArMonitoring
+		 LArValidation
 		 LArObjects
 		 LArPersistency
 		 LArPlugins

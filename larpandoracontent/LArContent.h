@@ -26,6 +26,10 @@
 
 #include "larpandoracontent/LArMonitoring/EventValidationAlgorithm.h"
 #include "larpandoracontent/LArMonitoring/VisualMonitoringAlgorithm.h"
+#include "larpandoracontent/LArMonitoring/SliceValidationAlgorithm.h"
+
+#include "larpandoracontent/LArValidation/PreRemovalAlgorithm.h"
+#include "larpandoracontent/LArValidation/PostRemovalAlgorithm.h"
 
 #include "larpandoracontent/LArPersistency/EventReadingAlgorithm.h"
 #include "larpandoracontent/LArPersistency/EventWritingAlgorithm.h"
@@ -142,6 +146,9 @@ class LArContent
 public:
     #define LAR_ALGORITHM_LIST(d)                                                                                               \
         d("LArEventValidation",                     lar_content::EventValidationAlgorithm::Factory)                             \
+        d("LArSliceValidation",                     lar_content::SliceValidationAlgorithm::Factory)                             \
+        d("LArPreRemoval",                          lar_content::PreRemovalAlgorithm::Factory)                                  \
+        d("LArPostRemoval",                         lar_content::PostRemovalAlgorithm::Factory)                                 \
         d("LArVisualMonitoring",                    lar_content::VisualMonitoringAlgorithm::Factory)                            \
         d("LArEventReading",                        lar_content::EventReadingAlgorithm::Factory)                                \
         d("LArEventWriting",                        lar_content::EventWritingAlgorithm::Factory)                                \
