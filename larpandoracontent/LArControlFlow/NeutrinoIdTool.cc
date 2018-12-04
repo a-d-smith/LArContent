@@ -33,8 +33,31 @@ NeutrinoIdTool::NeutrinoIdTool() :
     m_minCompleteness(0.9f),
     m_minProbability(0.0f),
     m_maxNeutrinos(1),
-    m_filePathEnvironmentVariable("FW_SEARCH_PATH")
+    m_filePathEnvironmentVariable("FW_SEARCH_PATH"),
+    m_useValidationMode(false),
+    m_shouldPrintToScreen(true),
+    m_shouldVisualizeSlices(false),
+    m_shouldWriteToFile(false),
+    m_treeName("neutrinoId"),
+    m_fileName("NeutrinoIdValidation.root")
 {
+}
+
+//------------------------------------------------------------------------------------------------------------------------------------------
+
+NeutrinoIdTool::~NeutrinoIdTool()
+{
+    if (m_useValidationMode && m_shouldWriteToFile)
+    {
+        try
+        {
+            PANDORA_MONITORING_API(SaveTree(this->GetPandora(), m_treeName.c_str(), m_fileName.c_str(), "UPDATE"));
+        }
+        catch (const StatusCodeException &)
+        {
+            std::cout << "NeutrinoIdTool: Unable to write tree " << m_treeName << " to file " << m_fileName << std::endl;
+        }
+    }
 }
 
 //------------------------------------------------------------------------------------------------------------------------------------------
@@ -71,6 +94,106 @@ void NeutrinoIdTool::SelectOutputPfos(const Algorithm *const pAlgorithm, const S
         return;
     }
 
+    // TODO factorise the below
+    if (m_useValidationMode)
+    {
+        unsigned int bestSliceIndex(std::numeric_limits<unsigned int>::max());
+        std::vector<float> purities, completenesses;
+        this->GetBestMCSliceIndex(pAlgorithm, nuSliceHypotheses, crSliceHypotheses, bestSliceIndex, purities, completenesses);
+    
+        std::vector<float> probabilities;
+        unsigned int mostProbableSliceIndex(std::numeric_limits<unsigned int>::max());
+        float highestProbability(-std::numeric_limits<float>::max());
+
+        for (unsigned int sliceIndex = 0; sliceIndex < nSlices; ++sliceIndex)
+        {
+            const float nuProbability(sliceFeaturesVector.at(sliceIndex).GetNeutrinoProbability(m_supportVectorMachine));
+            probabilities.push_back(nuProbability);
+
+            if (nuProbability > highestProbability)
+            {
+                highestProbability = nuProbability;
+                mostProbableSliceIndex = sliceIndex;
+            }
+        }
+            
+        // Get the neutrino
+        const MCParticleList *pMCParticleList = nullptr;
+        PANDORA_THROW_RESULT_IF(STATUS_CODE_SUCCESS, !=, PandoraContentApi::GetCurrentList(*pAlgorithm, pMCParticleList));
+
+        MCParticleVector trueNeutrinos;
+        LArMCParticleHelper::GetTrueNeutrinos(pMCParticleList, trueNeutrinos);
+
+        if (trueNeutrinos.size() != 1)
+        {
+            std::cout << "NeutrinoIdTool::GetNuanceCode - Error: number of true neutrinos in event must be exactly one" << std::endl;
+            throw StatusCodeException(STATUS_CODE_OUT_OF_RANGE);
+        }
+
+        const MCParticle *const pNeutrino(trueNeutrinos.front());
+        const float nuPdg(pNeutrino->GetParticleId());
+        const float nuEnergy(pNeutrino->GetEnergy());
+        const float nuVtxX(pNeutrino->GetVertex().GetX());
+        const float nuVtxY(pNeutrino->GetVertex().GetY());
+        const float nuVtxZ(pNeutrino->GetVertex().GetZ());
+        const float nuMomX(pNeutrino->GetMomentum().GetX());
+        const float nuMomY(pNeutrino->GetMomentum().GetY());
+        const float nuMomZ(pNeutrino->GetMomentum().GetZ());
+    
+        if (m_shouldPrintToScreen)
+        {
+            std::cout << "True neutrino" << std::endl;
+            std::cout << "    PDG      = " << nuPdg << std::endl;
+            std::cout << "    Energy   = " << nuEnergy << " GeV" << std::endl;
+            std::cout << "    Vertex   = ( " << nuVtxX << ", " << nuVtxY << ", " << nuVtxZ << " ) cm" << std::endl;
+            std::cout << "    Momentum = ( " << nuMomX << ", " << nuMomY << ", " << nuMomZ << " ) GeV" << std::endl;
+        }
+
+        for (unsigned int sliceIndex = 0; sliceIndex < nSlices; ++sliceIndex)
+        {
+            const bool isBestSlice(sliceIndex == bestSliceIndex);
+            const bool isMostProbable(sliceIndex == mostProbableSliceIndex);
+            const bool isCorrect((isBestSlice && isMostProbable) || (!isBestSlice && !isMostProbable));
+    
+            if (m_shouldPrintToScreen)
+            {
+                std::cout << "Slice " << sliceIndex << std::endl;
+                std::cout << "    Purity        - " << purities.at(sliceIndex) << std::endl;
+                std::cout << "    Completeness  - " << completenesses.at(sliceIndex) << std::endl;
+                std::cout << "    Probability   - " << probabilities.at(sliceIndex) << std::endl;
+                std::cout << "    Best slice    - " << isBestSlice << std::endl;
+                std::cout << "    Most probable - " << isMostProbable << std::endl;
+                std::cout << "    Correct ID    - " << isCorrect << std::endl;
+            }
+
+            if (m_shouldVisualizeSlices)
+            {
+                PANDORA_MONITORING_API(VisualizeParticleFlowObjects(this->GetPandora(), &nuSliceHypotheses.at(sliceIndex), "Slice " + std::to_string(sliceIndex) + " (Nu)", AUTOID, true, true));
+                PANDORA_MONITORING_API(ViewEvent(this->GetPandora()));
+                PANDORA_MONITORING_API(VisualizeParticleFlowObjects(this->GetPandora(), &crSliceHypotheses.at(sliceIndex), "Slice " + std::to_string(sliceIndex) + " (CR)", AUTOID, true,true));
+                PANDORA_MONITORING_API(ViewEvent(this->GetPandora()));
+            }
+
+            if (m_shouldWriteToFile)
+            {
+                PANDORA_MONITORING_API(SetTreeVariable(this->GetPandora(), m_treeName.c_str(), "nuPdg", nuPdg));
+                PANDORA_MONITORING_API(SetTreeVariable(this->GetPandora(), m_treeName.c_str(), "nuEnergy", nuEnergy));
+                PANDORA_MONITORING_API(SetTreeVariable(this->GetPandora(), m_treeName.c_str(), "nuVtxX", nuVtxX));
+                PANDORA_MONITORING_API(SetTreeVariable(this->GetPandora(), m_treeName.c_str(), "nuVtxY", nuVtxY));
+                PANDORA_MONITORING_API(SetTreeVariable(this->GetPandora(), m_treeName.c_str(), "nuVtxZ", nuVtxZ));
+                PANDORA_MONITORING_API(SetTreeVariable(this->GetPandora(), m_treeName.c_str(), "nuMomX", nuMomX));
+                PANDORA_MONITORING_API(SetTreeVariable(this->GetPandora(), m_treeName.c_str(), "nuMomY", nuMomY));
+                PANDORA_MONITORING_API(SetTreeVariable(this->GetPandora(), m_treeName.c_str(), "nuMomZ", nuMomZ));
+                PANDORA_MONITORING_API(SetTreeVariable(this->GetPandora(), m_treeName.c_str(), "purity", purities.at(sliceIndex)));
+                PANDORA_MONITORING_API(SetTreeVariable(this->GetPandora(), m_treeName.c_str(), "completeness", completenesses.at(sliceIndex)));
+                PANDORA_MONITORING_API(SetTreeVariable(this->GetPandora(), m_treeName.c_str(), "score", probabilities.at(sliceIndex)));
+                PANDORA_MONITORING_API(SetTreeVariable(this->GetPandora(), m_treeName.c_str(), "isBestNuSlice", static_cast<int>(isBestSlice)));
+                PANDORA_MONITORING_API(SetTreeVariable(this->GetPandora(), m_treeName.c_str(), "isMostProbable", static_cast<int>(isMostProbable)));
+                PANDORA_MONITORING_API(FillTree(this->GetPandora(), m_treeName.c_str()));
+            }
+        }
+    }
+
     this->SelectPfosByProbability(pAlgorithm, nuSliceHypotheses, crSliceHypotheses, sliceFeaturesVector, selectedPfos);
 }
 
@@ -86,6 +209,20 @@ void NeutrinoIdTool::GetSliceFeatures(const NeutrinoIdTool *const pTool, const S
 
 bool NeutrinoIdTool::GetBestMCSliceIndex(const Algorithm *const pAlgorithm, const SliceHypotheses &nuSliceHypotheses, const SliceHypotheses &crSliceHypotheses, unsigned int &bestSliceIndex) const
 {
+    std::vector<float> purities, completenesses;
+    return this->GetBestMCSliceIndex(pAlgorithm, nuSliceHypotheses, crSliceHypotheses, bestSliceIndex, purities, completenesses);
+}
+
+//------------------------------------------------------------------------------------------------------------------------------------------
+
+bool NeutrinoIdTool::GetBestMCSliceIndex(const Algorithm *const pAlgorithm, const SliceHypotheses &nuSliceHypotheses, const SliceHypotheses &crSliceHypotheses, unsigned int &bestSliceIndex, std::vector<float> &purities, std::vector<float> &completenesses) const
+{
+    if (!purities.empty() || !completenesses.empty())
+    {
+        std::cout << "NeutrinoIdTool::GetBestMCSliceIndex - Error: input vectors for purity and completeness are not empty" << std::endl;
+        throw StatusCodeException(STATUS_CODE_INVALID_PARAMETER);
+    }
+
     unsigned int nHitsInBestSlice(0), nNuHitsInBestSlice(0);
 
     // Get all hits in all slices to find true number of mc hits
@@ -107,6 +244,7 @@ bool NeutrinoIdTool::GetBestMCSliceIndex(const Algorithm *const pAlgorithm, cons
     const int nuNHitsTotal(this->CountNeutrinoInducedHits(reconstructableCaloHitList));
     const CaloHitSet reconstructableCaloHitSet(reconstructableCaloHitList.begin(), reconstructableCaloHitList.end()); 
 
+    std::vector<unsigned int> nNuHitsInSlice;
     for (unsigned int sliceIndex = 0, nSlices = nuSliceHypotheses.size(); sliceIndex < nSlices; ++sliceIndex)
     {
         CaloHitList reconstructedCaloHitList;
@@ -119,13 +257,24 @@ bool NeutrinoIdTool::GetBestMCSliceIndex(const Algorithm *const pAlgorithm, cons
         }
 
         const unsigned int nNuHits(this->CountNeutrinoInducedHits(reconstructedCaloHitList));
+        const unsigned int nHits(reconstructedCaloHitList.size());
+        
+        const float purity(nHits > 0 ? static_cast<float>(nNuHits) / static_cast<float>(nHits) : 0.f);
+        purities.push_back(purity);
+        nNuHitsInSlice.push_back(nNuHits);
 
         if (nNuHits > nNuHitsInBestSlice)
         {
             nNuHitsInBestSlice = nNuHits;
-            nHitsInBestSlice = reconstructedCaloHitList.size();
+            nHitsInBestSlice = nHits;
             bestSliceIndex = sliceIndex;
         }
+    }
+
+    for (unsigned int sliceIndex = 0, nSlices = nuSliceHypotheses.size(); sliceIndex < nSlices; ++sliceIndex)                                
+    {
+        const float completeness(nuNHitsTotal > 0 ? static_cast<float>(nNuHitsInSlice.at(sliceIndex)) / static_cast<float>(nuNHitsTotal) : 0.f);
+        completenesses.push_back(completeness);
     }
 
     // ATTN for events with no neutrino induced hits, default neutrino purity and completeness to zero
@@ -156,12 +305,15 @@ void NeutrinoIdTool::Collect2DHits(const PfoList &pfos, CaloHitList &reconstruct
 
     for (const CaloHit *const pCaloHit : collectedHits)
     {
-        if (!reconstructableCaloHitSet.count(pCaloHit))
+        // ATTN. Here we have to get the parent address of the hits since the PFOs were made in a daughter pandora instance
+        const CaloHit *const pParentCaloHit(static_cast<const CaloHit *>(pCaloHit->GetParentAddress()));
+
+        if (!reconstructableCaloHitSet.count(pParentCaloHit))
             continue;
 
         // Ensure no hits have been double counted
-        if (std::find(reconstructedCaloHitList.begin(), reconstructedCaloHitList.end(), pCaloHit) == reconstructedCaloHitList.end())
-            reconstructedCaloHitList.push_back(pCaloHit);
+        if (std::find(reconstructedCaloHitList.begin(), reconstructedCaloHitList.end(), pParentCaloHit) == reconstructedCaloHitList.end())
+            reconstructedCaloHitList.push_back(pParentCaloHit);
     }
 }
 
@@ -560,6 +712,24 @@ StatusCode NeutrinoIdTool::ReadSettings(const TiXmlHandle xmlHandle)
         const std::string fullSvmFileName(LArFileHelper::FindFileInPath(svmFileName, m_filePathEnvironmentVariable));
         m_supportVectorMachine.Initialize(fullSvmFileName, svmName);
     }
+    
+    PANDORA_RETURN_RESULT_IF_AND_IF(STATUS_CODE_SUCCESS, STATUS_CODE_NOT_FOUND, !=, XmlHelper::ReadValue(xmlHandle,
+        "UseValidationMode", m_useValidationMode));
+    
+    PANDORA_RETURN_RESULT_IF_AND_IF(STATUS_CODE_SUCCESS, STATUS_CODE_NOT_FOUND, !=, XmlHelper::ReadValue(xmlHandle,
+        "PrintToScreen", m_shouldPrintToScreen));
+    
+    PANDORA_RETURN_RESULT_IF_AND_IF(STATUS_CODE_SUCCESS, STATUS_CODE_NOT_FOUND, !=, XmlHelper::ReadValue(xmlHandle,
+        "VisualizeSlices", m_shouldVisualizeSlices));
+    
+    PANDORA_RETURN_RESULT_IF_AND_IF(STATUS_CODE_SUCCESS, STATUS_CODE_NOT_FOUND, !=, XmlHelper::ReadValue(xmlHandle,
+        "WriteToFile", m_shouldWriteToFile));
+    
+    PANDORA_RETURN_RESULT_IF_AND_IF(STATUS_CODE_SUCCESS, STATUS_CODE_NOT_FOUND, !=, XmlHelper::ReadValue(xmlHandle,
+        "OutputFile", m_fileName));
+    
+    PANDORA_RETURN_RESULT_IF_AND_IF(STATUS_CODE_SUCCESS, STATUS_CODE_NOT_FOUND, !=, XmlHelper::ReadValue(xmlHandle,
+        "OutputTree", m_treeName));
 
     return STATUS_CODE_SUCCESS;
 }

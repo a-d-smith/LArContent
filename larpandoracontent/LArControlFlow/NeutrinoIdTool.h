@@ -34,6 +34,11 @@ public:
      *  @brief  Default constructor
      */
     NeutrinoIdTool();
+    
+    /**
+     *  @brief  Default destructor
+     */
+    ~NeutrinoIdTool();
 
     void SelectOutputPfos(const pandora::Algorithm *const pAlgorithm, const SliceHypotheses &nuSliceHypotheses, const SliceHypotheses &crSliceHypotheses, pandora::PfoList &selectedPfos);
 
@@ -171,6 +176,19 @@ private:
     bool GetBestMCSliceIndex(const pandora::Algorithm *const pAlgorithm, const SliceHypotheses &nuSliceHypotheses, const SliceHypotheses &crSliceHypotheses, unsigned int &bestSliceIndex) const;
 
     /**
+     *  @brief  Get the slice with the most neutrino induced hits using Monte-Carlo information
+     *
+     *  @param  pAlgorithm address of the master algorithm
+     *  @param  nuSliceHypotheses the input neutrino slice hypotheses
+     *  @param  crSliceHypotheses the input cosmic slice hypotheses
+     *  @param  bestSliceIndex the index of the slice with the most neutrino hits
+     *  @param  purities the output vector of purity of each slice
+     *  @param  completenesses the output vector of completeness of each slice
+     *
+     *  @return does the best slice pass the quality cuts for training?
+     */
+    bool GetBestMCSliceIndex(const pandora::Algorithm *const pAlgorithm, const SliceHypotheses &nuSliceHypotheses, const SliceHypotheses &crSliceHypotheses, unsigned int &bestSliceIndex, std::vector<float> &purities, std::vector<float> &completenesses) const;
+    /**
      *  @brief  Determine if the event passes the selection cuts for training and has the required NUANCE code
      *
      *  @param  pAlgorithm address of the master algorithm
@@ -252,6 +270,15 @@ private:
 
     SupportVectorMachine  m_supportVectorMachine;         ///< The support vector machine
     std::string           m_filePathEnvironmentVariable;  ///< The environment variable providing a list of paths to svm files
+   
+    // Validation
+    bool                  m_useValidationMode;            ///< If we validation mode should be used
+    bool                  m_shouldPrintToScreen;          ///< If we should print validation information to screen
+    bool                  m_shouldVisualizeSlices;        ///< If we should visualize slices in validaiton mode
+    bool                  m_shouldWriteToFile;            ///< If we should write validation information to a root file
+    std::string           m_treeName;                     ///< The name of the root tree
+    std::string           m_fileName;                     ///< The name of the root file
+
 };
 
 } // namespace lar_content
