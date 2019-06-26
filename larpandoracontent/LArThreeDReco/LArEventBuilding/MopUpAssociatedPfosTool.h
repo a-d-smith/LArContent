@@ -171,6 +171,7 @@ private:
     /**
      *  @brief  Make parent / daughter links with unmatched PFOs whose best match is to the neutrino vertex or a currently assigned PFO
      *
+     *  @param  pAlgorithm the algorithm calling the tool
      *  @param  unassignedPfos the current parentless PFOs
      *  @param  assignedPfos the current PFOs with parents
      *  @param  pfoMatchingMap the output mapping from unmatched PFO to its matching details
@@ -178,29 +179,34 @@ private:
      *
      *  @return if there was a match made
      */
-    bool MakeClearLinksToNeutrinoHierarchy(const pandora::PfoVector &unassignedPfos, const pandora::PfoVector &assignedPfos, 
-        const PfoMatchingMap &pfoMatchingMap, NeutrinoHierarchyAlgorithm::PfoInfoMap &pfoInfoMap) const;
+    bool MakeClearLinksToNeutrinoHierarchy(NeutrinoHierarchyAlgorithm *const pAlgorithm, const pandora::PfoVector &unassignedPfos,
+        const pandora::PfoVector &assignedPfos, const PfoMatchingMap &pfoMatchingMap,
+        NeutrinoHierarchyAlgorithm::PfoInfoMap &pfoInfoMap) const;
 
     /**
      *  @brief  Make parent / daughter links with the unmatched PFO with the next best match to the neutrino vertex or a currently assigned PFO
      *
+     *  @param  pAlgorithm the algorithm calling the tool
      *  @param  unassignedPfos the current parentless PFOs
      *  @param  assignedPfos the current PFOs with parents
      *  @param  pfoMatchingMap the output mapping from unmatched PFO to its matching details
      *  @param  pfoInfoMap the map of PFO info
      */
-    void MakeNextBestLinkToNeutrinoHierarchy(const pandora::PfoVector &unassignedPfos, const pandora::PfoVector &assignedPfos,
-        const PfoMatchingMap &pfoMatchingMap, NeutrinoHierarchyAlgorithm::PfoInfoMap &pfoInfoMap) const;
+    void MakeNextBestLinkToNeutrinoHierarchy(NeutrinoHierarchyAlgorithm *const pAlgorithm, const pandora::PfoVector &unassignedPfos,
+        const pandora::PfoVector &assignedPfos, const PfoMatchingMap &pfoMatchingMap,
+        NeutrinoHierarchyAlgorithm::PfoInfoMap &pfoInfoMap) const;
 
     /**
      *  @brief  Make a parent / daughter link for the input PFO to the neutrino vertex
      *
      *  @param  pPfo the PFO to link
      *  @param  useInner if the inner vertex of the PFO matches to the vertex (vs. the outer vertex)
+     *  @param  score the matching score for the link
      *  @param  pfoInfoMap the map of PFO info
+     *  @param  pAlgorithm the algorithm calling the tool
      */
-    void MakeVertexLink(const pandora::ParticleFlowObject *const pPfo, const bool useInner,
-        NeutrinoHierarchyAlgorithm::PfoInfoMap &pfoInfoMap) const;
+    void MakeVertexLink(const pandora::ParticleFlowObject *const pPfo, const bool useInner, const float score,
+        NeutrinoHierarchyAlgorithm::PfoInfoMap &pfoInfoMap, NeutrinoHierarchyAlgorithm *const pAlgorithm) const;
 
     /**
      *  @brief  Make a parent / daughter link for the input child PFO to another parent PFO
@@ -208,10 +214,13 @@ private:
      *  @param  pChildPfo the PFO to link
      *  @param  pParentPfo the PFO to link pChildPfo to
      *  @param  useInner if the inner vertex of the child PFO matches to the vertex (vs. the outer vertex)
+     *  @param  score the matching score for the link
      *  @param  pfoInfoMap the map of PFO info
+     *  @param  pAlgorithm the algorithm calling the tool
      */
     void MakePfoLink(const pandora::ParticleFlowObject *const pChildPfo, const pandora::ParticleFlowObject *const pParentPfo,
-        const bool useInner, NeutrinoHierarchyAlgorithm::PfoInfoMap &pfoInfoMap) const;
+        const bool useInner, const float score, NeutrinoHierarchyAlgorithm::PfoInfoMap &pfoInfoMap,
+        NeutrinoHierarchyAlgorithm *const pAlgorithm) const;
 
     pandora::StatusCode ReadSettings(const pandora::TiXmlHandle xmlHandle);
 

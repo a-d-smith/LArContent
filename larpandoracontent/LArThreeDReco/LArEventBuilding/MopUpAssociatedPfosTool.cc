@@ -51,12 +51,12 @@ void MopUpAssociatedPfosTool::Run(NeutrinoHierarchyAlgorithm *const pAlgorithm, 
             this->PrintPfoMatchingMap(unassignedPfos, assignedPfos, pfoMatchingMap, pfoInfoMap);
 
         // Only assign parent / daughter links to already assigned PFOs to avoid circular hierarchies
-        const bool wasLinkMade(this->MakeClearLinksToNeutrinoHierarchy(unassignedPfos, assignedPfos, pfoMatchingMap, pfoInfoMap));
+        const bool wasLinkMade(this->MakeClearLinksToNeutrinoHierarchy(pAlgorithm, unassignedPfos, assignedPfos, pfoMatchingMap, pfoInfoMap));
 
         // If no such links were the best choice, then make the next best available link to avoid isolated parts of the hierarchy
         if (!wasLinkMade)
         {
-            this->MakeNextBestLinkToNeutrinoHierarchy(unassignedPfos, assignedPfos, pfoMatchingMap, pfoInfoMap);
+            this->MakeNextBestLinkToNeutrinoHierarchy(pAlgorithm, unassignedPfos, assignedPfos, pfoMatchingMap, pfoInfoMap);
         }
 
         unassignedPfos.clear();
@@ -113,8 +113,8 @@ void MopUpAssociatedPfosTool::PrintPfoMatchingMap(const PfoVector &unassignedPfo
 
 //------------------------------------------------------------------------------------------------------------------------------------------
 
-bool MopUpAssociatedPfosTool::MakeClearLinksToNeutrinoHierarchy(const PfoVector &unassignedPfos, const PfoVector &assignedPfos,
-    const PfoMatchingMap &pfoMatchingMap, PfoInfoMap &pfoInfoMap) const
+bool MopUpAssociatedPfosTool::MakeClearLinksToNeutrinoHierarchy(NeutrinoHierarchyAlgorithm *const pAlgorithm,
+	const PfoVector &unassignedPfos, const PfoVector &assignedPfos, const PfoMatchingMap &pfoMatchingMap, PfoInfoMap &pfoInfoMap) const
 {
     bool wasMatchMade(false);
 
@@ -133,12 +133,12 @@ bool MopUpAssociatedPfosTool::MakeClearLinksToNeutrinoHierarchy(const PfoVector 
 
         if (!pBestMatchedPfo || vertexMatchScore > pfoMatchScore)
         {
-            this->MakeVertexLink(pPfo, vertexMatchUseInner, pfoInfoMap);
+            this->MakeVertexLink(pPfo, vertexMatchUseInner, vertexMatchScore, pfoInfoMap, pAlgorithm);
             wasMatchMade = true;
         } 
         else if (std::find(assignedPfos.begin(), assignedPfos.end(), pBestMatchedPfo) != assignedPfos.end())
         {
-            this->MakePfoLink(pPfo, pBestMatchedPfo, pfoMatchUseInner, pfoInfoMap);
+            this->MakePfoLink(pPfo, pBestMatchedPfo, pfoMatchUseInner, pfoMatchScore, pfoInfoMap, pAlgorithm);
             wasMatchMade = true;
         }
     }
@@ -148,8 +148,8 @@ bool MopUpAssociatedPfosTool::MakeClearLinksToNeutrinoHierarchy(const PfoVector 
 
 //------------------------------------------------------------------------------------------------------------------------------------------
 
-void MopUpAssociatedPfosTool::MakeNextBestLinkToNeutrinoHierarchy(const PfoVector &unassignedPfos, const PfoVector &assignedPfos,
-    const PfoMatchingMap &pfoMatchingMap, PfoInfoMap &pfoInfoMap) const
+void MopUpAssociatedPfosTool::MakeNextBestLinkToNeutrinoHierarchy(NeutrinoHierarchyAlgorithm *const pAlgorithm,
+	const PfoVector &unassignedPfos, const PfoVector &assignedPfos, const PfoMatchingMap &pfoMatchingMap, PfoInfoMap &pfoInfoMap) const
 {
     float bestMatchScore(-std::numeric_limits<float>::max());
     const ParticleFlowObject *pBestChildPfo(nullptr);
@@ -193,22 +193,27 @@ void MopUpAssociatedPfosTool::MakeNextBestLinkToNeutrinoHierarchy(const PfoVecto
 
     if (!pBestParentPfo)
     {
-        this->MakeVertexLink(pBestChildPfo, useInner, pfoInfoMap);
+        this->MakeVertexLink(pBestChildPfo, useInner, bestMatchScore, pfoInfoMap, pAlgorithm);
     }
     else
     {
-        this->MakePfoLink(pBestChildPfo, pBestParentPfo, useInner, pfoInfoMap);
+        this->MakePfoLink(pBestChildPfo, pBestParentPfo, useInner, bestMatchScore, pfoInfoMap, pAlgorithm);
     }
 }
 
 //------------------------------------------------------------------------------------------------------------------------------------------
 
-void MopUpAssociatedPfosTool::MakeVertexLink(const ParticleFlowObject *const pPfo, const bool useInner, PfoInfoMap &pfoInfoMap) const
+void MopUpAssociatedPfosTool::MakeVertexLink(const ParticleFlowObject *const pPfo, const bool useInner, const float score,
+    PfoInfoMap &pfoInfoMap, NeutrinoHierarchyAlgorithm *const pAlgorithm) const
 {
     PfoInfo *const pPfoInfo(pfoInfoMap.at(pPfo));
 
     pPfoInfo->SetNeutrinoVertexAssociation(true);
     pPfoInfo->SetInnerLayerAssociation(useInner);
+
+	object_creation::ParticleFlowObject::Metadata metadata;
+	metadata.m_propertiesToAdd["ParentLinkScore"] = score;
+	PANDORA_THROW_RESULT_IF(STATUS_CODE_SUCCESS, !=, PandoraContentApi::ParticleFlowObject::AlterMetadata(*pAlgorithm, pPfo, metadata));
 
     if (m_shouldDisplayMatchingInfo)
         std::cout << "Matching " << pPfo << " -> Neutrino Vertex" << std::endl;
@@ -217,7 +222,7 @@ void MopUpAssociatedPfosTool::MakeVertexLink(const ParticleFlowObject *const pPf
 //------------------------------------------------------------------------------------------------------------------------------------------
 
 void MopUpAssociatedPfosTool::MakePfoLink(const ParticleFlowObject *const pChildPfo, const ParticleFlowObject *const pParentPfo,
-    const bool useInner, PfoInfoMap &pfoInfoMap) const
+    const bool useInner, const float score, PfoInfoMap &pfoInfoMap, NeutrinoHierarchyAlgorithm *const pAlgorithm) const
 {
     PfoInfo *const pChildPfoInfo(pfoInfoMap.at(pChildPfo));
     PfoInfo *const pParentPfoInfo(pfoInfoMap.at(pParentPfo));
@@ -225,6 +230,10 @@ void MopUpAssociatedPfosTool::MakePfoLink(const ParticleFlowObject *const pChild
     pParentPfoInfo->AddDaughterPfo(pChildPfo);
     pChildPfoInfo->SetParentPfo(pParentPfo);
     pChildPfoInfo->SetInnerLayerAssociation(useInner);
+	
+    object_creation::ParticleFlowObject::Metadata metadata;
+	metadata.m_propertiesToAdd["ParentLinkScore"] = score;
+	PANDORA_THROW_RESULT_IF(STATUS_CODE_SUCCESS, !=, PandoraContentApi::ParticleFlowObject::AlterMetadata(*pAlgorithm, pChildPfo, metadata));
     
     if (m_shouldDisplayMatchingInfo)
         std::cout << "Matching " << pChildPfo << " -> " << pParentPfo << std::endl;
