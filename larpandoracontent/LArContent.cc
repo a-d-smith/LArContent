@@ -66,6 +66,7 @@
 
 #include "larpandoracontent/LArThreeDReco/LArEventBuilding/BranchAssociatedPfosTool.h"
 #include "larpandoracontent/LArThreeDReco/LArEventBuilding/EndAssociatedPfosTool.h"
+#include "larpandoracontent/LArThreeDReco/LArEventBuilding/MopUpAssociatedPfosTool.h"
 #include "larpandoracontent/LArThreeDReco/LArEventBuilding/EventSlicingTool.h"
 #include "larpandoracontent/LArThreeDReco/LArEventBuilding/NeutrinoCreationAlgorithm.h"
 #include "larpandoracontent/LArThreeDReco/LArEventBuilding/NeutrinoDaughterVerticesAlgorithm.h"
@@ -280,6 +281,7 @@
     d("LArCheatingNeutrinoId",                  CheatingNeutrinoIdTool)                                                         \
     d("LArBranchAssociatedPfos",                BranchAssociatedPfosTool)                                                       \
     d("LArEndAssociatedPfos",                   EndAssociatedPfosTool)                                                          \
+    d("LArMopUpAssociatedPfos",                 MopUpAssociatedPfosTool)                                                        \
     d("LArEventSlicing",                        EventSlicingTool)                                                               \
     d("LArVertexAssociatedPfos",                VertexAssociatedPfosTool)                                                       \
     d("LArClearShowers",                        ClearShowersTool)                                                               \
