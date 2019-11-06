@@ -107,6 +107,8 @@
 #include "larpandoracontent/LArThreeDReco/LArTrackFragments/ThreeDTrackFragmentsAlgorithm.h"
 #include "larpandoracontent/LArThreeDReco/LArTrackFragments/ClearTrackFragmentsTool.h"
 
+#include "larpandoracontent/LArThreeDReco/LArSecondaryInteractions/SecondaryInteractionsAlgorithm.h"
+
 #include "larpandoracontent/LArThreeDReco/LArTransverseTrackMatching/ThreeDTransverseTracksAlgorithm.h"
 #include "larpandoracontent/LArThreeDReco/LArTransverseTrackMatching/ClearTracksTool.h"
 #include "larpandoracontent/LArThreeDReco/LArTransverseTrackMatching/LongTracksTool.h"
@@ -221,6 +223,7 @@
     d("LArThreeDRemnants",                      ThreeDRemnantsAlgorithm)                                                        \
     d("LArThreeDShowers",                       ThreeDShowersAlgorithm)                                                         \
     d("LArThreeDTrackFragments",                ThreeDTrackFragmentsAlgorithm)                                                  \
+    d("LArSecondaryInteractions",               SecondaryInteractionsAlgorithm)                                                 \
     d("LArThreeDTransverseTracks",              ThreeDTransverseTracksAlgorithm)                                                \
     d("LArCutClusterCharacterisation",          CutClusterCharacterisationAlgorithm)                                            \
     d("LArCutPfoCharacterisation",              CutPfoCharacterisationAlgorithm)                                                \
