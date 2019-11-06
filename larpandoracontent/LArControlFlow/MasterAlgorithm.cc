@@ -49,7 +49,8 @@ MasterAlgorithm::MasterAlgorithm() :
     m_fullWidthCRWorkerWireGaps(true),
     m_passMCParticlesToWorkerInstances(false),
     m_filePathEnvironmentVariable("FW_SEARCH_PATH"),
-    m_inTimeMaxX0(1.f)
+    m_inTimeMaxX0(1.f),
+    m_onlyProcessSingleTopology(false)
 {
 }
 
@@ -152,6 +153,9 @@ StatusCode MasterAlgorithm::Run()
 {
     PANDORA_RETURN_RESULT_IF(STATUS_CODE_SUCCESS, !=, this->Reset());
 
+    if (!this->IsEventOfChosenTopology())
+        return STATUS_CODE_SUCCESS;
+
     if (!m_workerInstancesInitialized)
         PANDORA_RETURN_RESULT_IF(STATUS_CODE_SUCCESS, !=, this->InitializeWorkerInstances());
 
@@ -191,6 +195,79 @@ StatusCode MasterAlgorithm::Run()
     }
 
     return STATUS_CODE_SUCCESS;
+}
+
+//------------------------------------------------------------------------------------------------------------------------------------------
+
+bool MasterAlgorithm::IsEventOfChosenTopology() const
+{
+    if (!m_onlyProcessSingleTopology)
+        return true;
+
+    const MCParticleList *pMCParticleList = nullptr;
+    PANDORA_RETURN_RESULT_IF(STATUS_CODE_SUCCESS, !=, PandoraContentApi::GetCurrentList(*this, pMCParticleList));
+
+    const CaloHitList *pCaloHitList = nullptr;
+    PANDORA_RETURN_RESULT_IF(STATUS_CODE_SUCCESS, !=, PandoraContentApi::GetCurrentList(*this, pCaloHitList));
+
+    LArMCParticleHelper::PrimaryParameters parameters;
+    parameters.m_minHitSharingFraction = 0.f;
+    LArMCParticleHelper::MCContributionMap nuMCParticlesToGoodHitsMap;
+    LArMCParticleHelper::SelectReconstructableMCParticles(pMCParticleList, pCaloHitList, parameters, LArMCParticleHelper::IsBeamNeutrinoFinalState, nuMCParticlesToGoodHitsMap);
+
+    // Extract the reconstructable topology from the contribution map
+    PdgToCountMap thisTopology;
+    for (const auto &contribution : nuMCParticlesToGoodHitsMap)
+    {
+        const auto pMCParticle = contribution.first;
+        const auto pdgCode = pMCParticle->GetParticleId();
+        auto iter = thisTopology.find(pdgCode);
+            
+        if (iter == thisTopology.end())
+        {
+            thisTopology.emplace(pdgCode, 1);
+        }
+        else
+        {
+            iter->second++;
+        }
+    }
+
+    // Check that this event has the desired topology
+    for (const auto &entry : thisTopology)
+    {
+        const auto pdgCode = entry.first;
+        const auto count = entry.second;
+
+        const auto iter = m_topologyMap.find(pdgCode);
+        if (iter == m_topologyMap.end())
+            return false;
+
+        // ATTN here count = -1 means any number of particles is allowed (including zero)
+        if (iter->second != count && iter->second != -1)
+            return false;
+    }
+    
+    for (const auto &entry : m_topologyMap)
+    {
+        const auto pdgCode = entry.first;
+        const auto count = entry.second;
+
+        const auto iter = thisTopology.find(pdgCode);
+        if (iter == thisTopology.end())
+        {
+            if (count > 0)
+                return false;
+
+            continue;
+        }
+
+        // ATTN here count = -1 means any number of particles is allowed (including zero)
+        if (iter->second != count && count != -1)
+            return false;
+    }
+    
+    return true;
 }
 
 //------------------------------------------------------------------------------------------------------------------------------------------
@@ -1024,6 +1101,37 @@ const Pandora *MasterAlgorithm::CreateWorkerInstance(const LArTPCMap &larTPCMap,
 
 StatusCode MasterAlgorithm::ReadSettings(const TiXmlHandle xmlHandle)
 {
+    PANDORA_RETURN_RESULT_IF_AND_IF(STATUS_CODE_SUCCESS, STATUS_CODE_NOT_FOUND, !=, XmlHelper::ReadValue(xmlHandle,
+        "OnlyProcessSingleTopology", m_onlyProcessSingleTopology));
+
+    if (m_onlyProcessSingleTopology)
+    {
+        StringVector topologyStrings;
+        PANDORA_RETURN_RESULT_IF(STATUS_CODE_SUCCESS, !=, XmlHelper::ReadVectorOfValues(xmlHandle, "Topology", topologyStrings));
+
+        for (const auto &topologyString : topologyStrings)
+        {
+            StringVector countPdgVector;
+            const std::string delimiter(":");
+            XmlHelper::TokenizeString(topologyString, countPdgVector, delimiter);
+
+            if (countPdgVector.size() != 2)
+                return STATUS_CODE_INVALID_PARAMETER;
+
+            int count(0);
+            int pdgCode(0);
+
+            if (!StringToType(countPdgVector.at(0), count) || !StringToType(countPdgVector.at(1), pdgCode))
+                return STATUS_CODE_INVALID_PARAMETER;
+
+            // ATTN we allow a count of -1 to mean any number of particles
+            if (count < -1)
+                return STATUS_CODE_INVALID_PARAMETER;
+
+            m_topologyMap.emplace(pdgCode, count);
+        }
+    }
+
     ExternalSteeringParameters *pExternalParameters(nullptr);
 
     if (this->ExternalParametersPresent())
@@ -1112,7 +1220,7 @@ StatusCode MasterAlgorithm::ReadSettings(const TiXmlHandle xmlHandle)
 
     PANDORA_RETURN_RESULT_IF(STATUS_CODE_SUCCESS, !=, this->ReadExternalSettings(pExternalParameters, !pExternalParameters ? InputBool() :
         pExternalParameters->m_printOverallRecoStatus, xmlHandle, "PrintOverallRecoStatus", m_printOverallRecoStatus));
-
+    
     PANDORA_RETURN_RESULT_IF_AND_IF(STATUS_CODE_SUCCESS, STATUS_CODE_NOT_FOUND, !=, XmlHelper::ReadValue(xmlHandle,
         "VisualizeOverallRecoStatus", m_visualizeOverallRecoStatus));
 

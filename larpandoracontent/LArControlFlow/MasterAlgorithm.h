@@ -80,6 +80,11 @@ public:
 
 private:
     /**
+     *  @brief  Mapping from a pdg code to a particle count
+     */
+    typedef std::unordered_map<int, int> PdgToCountMap;
+
+    /**
      *  @brief  LArTPCHitList class
      */
     class LArTPCHitList
@@ -92,6 +97,13 @@ private:
     typedef std::map<unsigned int, LArTPCHitList> VolumeIdToHitListMap;
 
     pandora::StatusCode Run();
+
+    /**
+     *  @brief  Check if the event is of the chosen topology
+     *
+     *  @return boolean: true if the event is of the chosen topology, false otherwise
+     */
+    bool IsEventOfChosenTopology() const;
 
     /**
      *  @brief  Initialize pandora worker instances
@@ -336,6 +348,9 @@ private:
     std::string                 m_recreatedVertexListName;          ///< The output recreated vertex list name
 
     float                       m_inTimeMaxX0;                      ///< Cut on X0 to determine whether particle is clear cosmic ray
+
+    bool                        m_onlyProcessSingleTopology;        ///< Whether to only process a single (user supplied) topology - skip all other events
+    PdgToCountMap               m_topologyMap;                      ///< The input mapping from pdg code to the desired number of particles for the chosen topology (-1 = any number)
 };
 
 //------------------------------------------------------------------------------------------------------------------------------------------

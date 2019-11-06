@@ -347,7 +347,21 @@ void VisualMonitoringAlgorithm::VisualizeVertexList(const std::string &listName)
             vertexList.push_back(pVertex);
     }
 
-    PANDORA_MONITORING_API(VisualizeVertices(this->GetPandora(), &vertexList, listName.empty() ? "CurrentVertices" : listName.c_str(), AUTO));
+    /* BEGIN ASMITH HACK */
+    unsigned int counter = 0;
+    for (const auto &pVertex : vertexList)
+    {
+        VertexList projectedVertices;
+        projectedVertices.push_back(pVertex);
+
+        // HERE DO THE PROJECTION
+
+        PANDORA_MONITORING_API(VisualizeVertices(this->GetPandora(), &vertexList, "vertex" + std::to_string(counter), AUTO));
+        counter++;
+    }
+    
+    //PANDORA_MONITORING_API(VisualizeVertices(this->GetPandora(), &vertexList, listName.empty() ? "CurrentVertices" : listName.c_str(), AUTO));
+    /* END ASMITH HACK*/
 }
 
 //------------------------------------------------------------------------------------------------------------------------------------------
