@@ -48,15 +48,6 @@ protected:
     void CollectInputPfos(pandora::PfoList &inputPfos) const;
 
     /**
-     *  @brief  Reorder the input hit by nearest neighbour starting with the vertex position, remove any isolated hits then return a vector of continuous segments
-     *
-     *  @param  pVertex the input neutrino interaction vertex
-     *  @param  caloHitList the input hit list to order
-     *  @param  outputSegments the filtered and ordered output hits arranged into continous segments
-     */
-    void GetContinuousSegments(const pandora::Vertex *const pVertex, const pandora::CaloHitList &caloHitList, std::vector<pandora::CaloHitList> &outputSegments) const;
-
-    /**
      *  @brief  Get the mapping between pairs of hits and their separation, only stored if separation is within isolated hit distance threshold
      *
      *  @param  caloHitList the input list of calo hits
@@ -116,10 +107,12 @@ protected:
     void StitchSegments(const std::vector<pandora::CaloHitList> &initialSegments, std::vector<pandora::CaloHitList> &stitchedSegments) const;
 
     // TODO doxygen comments
+    void GetSplitHits(const std::vector<pandora::CaloHitList> &continuousSegments, const HitSeparationMap &separationMap, pandora::CaloHitList &splitHits) const;
     void GetKinkHits(const pandora::CaloHitList &segment, pandora::CaloHitList &kinkHits) const;
-    void GetKinkHits(const std::vector<pandora::CaloHitList> &continuousSegments, pandora::CaloHitList &kinkHits) const;
     float GetKinkAngle(const pandora::CartesianVector &thisHitPos, const pandora::CaloHitList &preHits, const pandora::CaloHitList &postHits) const;
     unsigned int GetIndexWithMaxKinkAngle(const std::vector<std::pair<unsigned int, float> > &hitIndexCosThetaBunch) const;
+
+    void GetBifurcationHits(const std::vector<pandora::CaloHitList> &continuousSegments, const HitSeparationMap &separationMap, pandora::CaloHitList &bifurcationHits) const;
 
     pandora::StringVector m_pfoListNames;        ///< The input vector of pfo list names
     std::string           m_vertexListName;      ///< The input list of vectors - must be of size one: the neutrino vertex

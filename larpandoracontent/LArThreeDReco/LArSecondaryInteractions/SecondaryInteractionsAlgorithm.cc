@@ -45,16 +45,19 @@ StatusCode SecondaryInteractionsAlgorithm::Run()
             CaloHitList caloHits;
             LArPfoHelper::GetCaloHits(pPfo, view, caloHits);
 
+            HitSeparationMap separationMap;
+            this->GetHitSeparationMap(caloHits, separationMap);
+            
             // Organise the hits into continuous segments
             std::vector<CaloHitList> segments;
-            this->GetContinuousSegments(pVertex, caloHits, segments);
-
-            // Get the hits that sit at a kink position
-            CaloHitList kinkHits;
-            this->GetKinkHits(segments, kinkHits);
-       
+            this->GetContinuousSegments(pVertex, caloHits, separationMap, segments);
+            
+            // Get the hits that sit at a kink or bifurcation position
+            CaloHitList splitHits;
+            this->GetSplitHits(segments, separationMap, splitHits);
+            
             /* BEGIN DEBUG */
-            std::cout << "Found " << segments.size() << " segments and " << kinkHits.size() << " kinks in view " << view << std::endl;
+            std::cout << "Found " << segments.size() << " segments and " << splitHits.size() << " kinks in view " << view << std::endl;
 
             PANDORA_MONITORING_API(VisualizeCaloHits(this->GetPandora(), &caloHits, "AllHits" + std::to_string(view), AUTO));
 
@@ -68,9 +71,9 @@ StatusCode SecondaryInteractionsAlgorithm::Run()
                 PANDORA_MONITORING_API(VisualizeCaloHits(this->GetPandora(), &hits, name, color));
             }
             
-            for (unsigned int i = 0; i < kinkHits.size(); ++i)
+            for (unsigned int i = 0; i < splitHits.size(); ++i)
             {
-                const auto kinkPosition = (*std::next(kinkHits.begin(), i))->GetPositionVector();
+                const auto kinkPosition = (*std::next(splitHits.begin(), i))->GetPositionVector();
 
                 const auto name = "Kink" + std::to_string(i);
                 PANDORA_MONITORING_API(AddMarkerToVisualization(this->GetPandora(), &kinkPosition, name, BLACK, 2));
@@ -111,19 +114,6 @@ void SecondaryInteractionsAlgorithm::CollectInputPfos(PfoList &inputPfos) const
 
 // -----------------------------------------------------------------------------------------------------------------------------------------
 
-void SecondaryInteractionsAlgorithm::GetContinuousSegments(const Vertex *const pVertex, const CaloHitList &caloHitList, std::vector<CaloHitList> &outputSegments) const
-{
-    // We don't need to order 0 or 1 hit
-    if (caloHitList.size() < 2)
-        return;
-
-    HitSeparationMap separationMap;
-    this->GetHitSeparationMap(caloHitList, separationMap);
-    this->GetContinuousSegments(pVertex, caloHitList, separationMap, outputSegments);
-}
-
-// -----------------------------------------------------------------------------------------------------------------------------------------
-
 void SecondaryInteractionsAlgorithm::GetHitSeparationMap(const CaloHitList &caloHitList, HitSeparationMap &separationMap) const
 {
     const auto isolatedHitDistanceSquared = m_isolatedHitDistance * m_isolatedHitDistance;
@@ -155,6 +145,13 @@ void SecondaryInteractionsAlgorithm::GetHitSeparationMap(const CaloHitList &calo
 
 void SecondaryInteractionsAlgorithm::GetContinuousSegments(const Vertex *const pVertex, const CaloHitList &caloHitList, const HitSeparationMap &separationMap, std::vector<CaloHitList> &continuousSegments) const
 {
+    // We don't need to order 0 or 1 hit
+    if (caloHitList.size() < 2)
+    {
+        continuousSegments.push_back(caloHitList);
+        return;
+    }
+
     CaloHitList remainingHits = caloHitList;
     std::vector<CaloHitList> initialSegments;
 
@@ -283,9 +280,6 @@ bool SecondaryInteractionsAlgorithm::GetNearestNeighbor(const HitSeparationMap &
     
 void SecondaryInteractionsAlgorithm::StitchSegments(const std::vector<CaloHitList> &initialSegments, std::vector<CaloHitList> &stitchedSegments) const
 {
-    std::cout << "Stitching segments" << std::endl;
-    std::cout << "  - Input segments : " << initialSegments.size() << std::endl;
-    
     stitchedSegments = initialSegments;
     bool stitchMade = true;
     const auto thresholdSquared = m_stitchingThreshold * m_stitchingThreshold;
@@ -337,17 +331,9 @@ void SecondaryInteractionsAlgorithm::StitchSegments(const std::vector<CaloHitLis
             }
         }
 
-        std::cout << "  - Current segments" << std::endl;
-        for (unsigned int k = 0; k < stitchedSegments.size(); ++k)
-        {
-            std::cout << "    - " << k << " - " << stitchedSegments.at(k).size() << std::endl;
-        }
-
         // Make the stitch
         if (stitchMade)
         {
-            std::cout << " - Stitching segments: " << stitchIndexI << " & " << stitchIndexJ << std::endl;
-
             auto &segmentI = stitchedSegments.at(stitchIndexI);
             auto &segmentJ = stitchedSegments.at(stitchIndexJ);
 
@@ -365,23 +351,27 @@ void SecondaryInteractionsAlgorithm::StitchSegments(const std::vector<CaloHitLis
 
             // Remove the second segment
             stitchedSegments.erase(std::next(stitchedSegments.begin(), stitchIndexJ));
-        
-            std::cout << "  - Stitched segments" << std::endl;
-            for (unsigned int k = 0; k < stitchedSegments.size(); ++k)
-            {
-                std::cout << "    - " << k << " - " << stitchedSegments.at(k).size() << std::endl;
-            }
         }
     }
-    std::cout << "  - Stitched segments : " << stitchedSegments.size() << std::endl;
 }
 
 // -----------------------------------------------------------------------------------------------------------------------------------------
 
-void SecondaryInteractionsAlgorithm::GetKinkHits(const std::vector<CaloHitList> &continuousSegments, CaloHitList &kinkHits) const
+void SecondaryInteractionsAlgorithm::GetSplitHits(const std::vector<CaloHitList> &continuousSegments, const HitSeparationMap &separationMap, CaloHitList &splitHits) const
 {
+    // Collect hits at possible split points: kinks, bifurcations
+    CaloHitList collectedHits;
+    this->GetBifurcationHits(continuousSegments, separationMap, collectedHits);
+
     for (const auto &segment : continuousSegments)
-        this->GetKinkHits(segment, kinkHits);
+        this->GetKinkHits(segment, collectedHits);
+
+    // Add the hits to the output provided they are unique
+    for (const auto &pHit : collectedHits)
+    {
+        if (std::find(splitHits.begin(), splitHits.end(), pHit) == splitHits.end())
+            splitHits.push_back(pHit);
+    }
 }
 
 // -----------------------------------------------------------------------------------------------------------------------------------------
@@ -495,6 +485,52 @@ unsigned int SecondaryInteractionsAlgorithm::GetIndexWithMaxKinkAngle(const std:
     }
 
     return outputIndex;
+}
+
+// -----------------------------------------------------------------------------------------------------------------------------------------
+
+void SecondaryInteractionsAlgorithm::GetBifurcationHits(const std::vector<CaloHitList> &continuousSegments, const HitSeparationMap &separationMap, CaloHitList &bifurcationHits) const
+{
+    if (continuousSegments.size() < 2)
+        return;
+
+    for (unsigned int i = 0; i < continuousSegments.size(); ++i)
+    {
+        const auto segmentI = continuousSegments.at(i);
+
+        if (segmentI.empty())
+            continue;
+
+        // Collect all of the hits in the other segments (ignoring the first and last hits)
+        CaloHitList remainingHits;
+        for (unsigned int j = 0; j < continuousSegments.size(); ++j)
+        {
+            if (i == j)
+                continue;
+        
+            const auto segmentJ = continuousSegments.at(j);
+            if (segmentJ.size() <= 2)
+                continue;
+            
+            remainingHits.insert(remainingHits.end(), std::next(segmentJ.begin()), std::prev(segmentJ.end()));
+        }
+
+        // Check the first hit in the segment for a neighbor
+        const auto pFrontHit = segmentI.front();
+        const auto pFrontNextHit = *std::next(segmentI.begin(), segmentI.size() == 1 ? 0 : 1);
+        
+        const CaloHit *pBifurcationHitFront = nullptr;
+        if (this->GetNearestNeighbor(separationMap, remainingHits, pFrontNextHit, pFrontHit, pBifurcationHitFront))
+            bifurcationHits.push_back(pBifurcationHitFront);
+    
+        // Check the last hit in the segment for a neighbor
+        const auto pBackHit = segmentI.back();
+        const auto pBackPrevHit = *std::prev(segmentI.end(), segmentI.size() == 1 ? 1 : 2); // ATTN here we go back 1 or 2 since end() points to the position after the back hit
+        
+        const CaloHit *pBifurcationHitBack = nullptr;
+        if (this->GetNearestNeighbor(separationMap, remainingHits, pBackPrevHit, pBackHit, pBifurcationHitBack))
+            bifurcationHits.push_back(pBifurcationHitBack);
+    }
 }
 
 // -----------------------------------------------------------------------------------------------------------------------------------------
