@@ -48,13 +48,13 @@ protected:
     void CollectInputPfos(pandora::PfoList &inputPfos) const;
 
     /**
-     *  @brief  Reorder the input hit by nearest neighbour starting with the vertex position, remove any isolated hits
+     *  @brief  Reorder the input hit by nearest neighbour starting with the vertex position, remove any isolated hits then return a vector of continuous segments
      *
      *  @param  pVertex the input neutrino interaction vertex
      *  @param  caloHitList the input hit list to order
-     *  @param  outputHitList the filtered and ordered output hits
+     *  @param  outputSegments the filtered and ordered output hits arranged into continous segments
      */
-    void FilterAndOrderHitsByNearestNeighbor(const pandora::Vertex *const pVertex, const pandora::CaloHitList &caloHitList, pandora::CaloHitList &outputHitList) const;
+    void GetContinuousSegments(const pandora::Vertex *const pVertex, const pandora::CaloHitList &caloHitList, std::vector<pandora::CaloHitList> &outputSegments) const;
 
     /**
      *  @brief  Get the mapping between pairs of hits and their separation, only stored if separation is within isolated hit distance threshold
@@ -85,15 +85,6 @@ protected:
     const pandora::CaloHit *GetClosestHitToVertex(const pandora::CaloHitList &caloHitList, const pandora::Vertex *const pVertex) const;
 
     /**
-     *  @brief  Get the hits in the input list that feature in the separation map, i.e those that aren't isolated
-     *
-     *  @param  caloHitList the input list of hits
-     *  @param  separationMap the input separation map
-     *  @param  nonIsolatedHits the output list of non-isolated hits
-     */
-    void GetNonIsolatedHits(const pandora::CaloHitList &caloHitList, const HitSeparationMap &separationMap, pandora::CaloHitList &nonIsolatedHits) const;
-
-    /**
      *  @brief  Collect all of the hits that link with the input seed hit and are in the input list of remaining hits
      *
      *  @param  pSeedHit the seed hit
@@ -116,15 +107,27 @@ protected:
      */
     bool GetNearestNeighbor(const HitSeparationMap &separationMap, const pandora::CaloHitList &remainingHits, const pandora::CaloHit *const pLastHit, const pandora::CaloHit *const pCurrentHit, const pandora::CaloHit *&pNextHit) const;
 
+    /**
+     *  @brief  Stitch together continuous segments if their end-points are within some threshold
+     *
+     *  @param  initialSegments the input vector of continuous segments
+     *  @param  stitchedSegments the output vector of stitched segments
+     */
+    void StitchSegments(const std::vector<pandora::CaloHitList> &initialSegments, std::vector<pandora::CaloHitList> &stitchedSegments) const;
+
     // TODO doxygen comments
-    void GetKinkIndices(const pandora::CaloHitList &segment, std::vector<unsigned int> &kinkIndices) const;
-    void GetKinkIndices(const std::vector<pandora::CaloHitList> &continuousSegments, std::vector< std::vector<unsigned int> > &segmentKinkIndices) const;
+    void GetKinkHits(const pandora::CaloHitList &segment, pandora::CaloHitList &kinkHits) const;
+    void GetKinkHits(const std::vector<pandora::CaloHitList> &continuousSegments, pandora::CaloHitList &kinkHits) const;
+    float GetKinkAngle(const pandora::CartesianVector &thisHitPos, const pandora::CaloHitList &preHits, const pandora::CaloHitList &postHits) const;
+    unsigned int GetIndexWithMaxKinkAngle(const std::vector<std::pair<unsigned int, float> > &hitIndexCosThetaBunch) const;
 
     pandora::StringVector m_pfoListNames;        ///< The input vector of pfo list names
     std::string           m_vertexListName;      ///< The input list of vectors - must be of size one: the neutrino vertex
     float                 m_isolatedHitDistance; ///< The separation distance from all other hits for to be considered isolated
+    float                 m_stitchingThreshold;  ///< The threshold distance within which two segments of hits should be stitched
     float                 m_transverseBias;      ///< The amount by which we bias the transverse coordinate over the longitudinal when finding the nearest neighbor
     int                   m_nSampleHits;         ///< The number of hits to sample either side of a given hit to find a kink
+    float                 m_cosAngleThreshold;   ///< The cosine angle below which we identify a kink
 };
 
 } // namespace lar_content
