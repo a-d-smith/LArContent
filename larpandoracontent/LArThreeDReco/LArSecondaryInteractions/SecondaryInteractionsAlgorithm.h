@@ -28,7 +28,61 @@ public:
     
     pandora::StatusCode Run();
 
-protected:
+private: 
+    /**
+     *  @brief  3D split point class
+     */
+    class SplitPoint3D
+    {
+    public:
+        /**
+         *  @brief  Constructor from three 2D hits (must be from different views)
+         *
+         *  @param  pandora the pandora instance, required to access the geomerty plugin
+         *  @param  pHitA the first hit
+         *  @param  pHitB the second hit
+         *  @param  pHitC the third hit
+         */
+        SplitPoint3D(const pandora::Pandora &pandora, const pandora::CaloHit *const pHitA, const pandora::CaloHit *const pHitB, const pandora::CaloHit *const pHitC);
+        
+        /**
+         *  @brief  Constructor from two 2D hits (must be from different views)
+         *
+         *  @param  pandora the pandora instance, required to access the geomerty plugin
+         *  @param  pHitA the first hit
+         *  @param  pHitB the second hit
+         */
+        SplitPoint3D(const pandora::Pandora &pandora, const pandora::CaloHit *const pHitA, const pandora::CaloHit *const pHitB);
+
+        /**
+         *  @brief  Get the address of the hit with the given view
+         *
+         *  @param  view the view to search for
+         *
+         *  @return the hit (A, B or C) with the given view
+         */
+        const pandora::CaloHit *GetHitWithView(const pandora::HitType &view) const;
+
+        const pandora::CaloHit   *m_pHitA;       ///< the first hit
+        const pandora::CaloHit   *m_pHitB;       ///< the second hit
+        const pandora::CaloHit   *m_pHitC;       ///< the third hit 
+        bool                      m_hasHitC;     ///< if the third hit is used
+        pandora::CartesianVector  m_position3D;  ///< the 3d position corresponding to the hits
+        float                     m_chi2;        ///< the measure of the extent to which the hit positions are compatible
+        float                     m_maxDeltaX;   ///< the largest separation between any of the hits in X
+
+    private:
+        /**
+         *  @brief  Check that the hit types are unique and either U, V or W
+         */
+        void CheckValidHitTypes() const;
+
+        /**
+         *  @brief  Set the maximum delta x value between the hits
+         */
+        void SetMaxDeltaX();
+    };
+
     typedef std::map<const pandora::CaloHit *const, std::map<const pandora::CaloHit *const, float> > HitSeparationMap;
 
     pandora::StatusCode ReadSettings(const pandora::TiXmlHandle xmlHandle);
@@ -64,6 +118,16 @@ protected:
      *  @param  continuousSegments the output vector of continuous segments
      */
     void GetContinuousSegments(const pandora::Vertex *const pVertex, const pandora::CaloHitList &caloHitList, const HitSeparationMap &separationMap, std::vector<pandora::CaloHitList> &continuousSegments) const;
+
+    /**
+     *  @brief  Get the hit in the input list that is closest to the input point
+     *
+     *  @param  caloHitList the input list of hits
+     *  @param  point the input point
+     *
+     *  @return the closest hit to the input point
+     */
+    const pandora::CaloHit *GetClosestHitToPoint(const pandora::CaloHitList &caloHitList, const pandora::CartesianVector &point) const;
 
     /**
      *  @brief  Get the hit in the input list that is closest to the vertex, if using 2D hits then use projected distances
@@ -111,16 +175,25 @@ protected:
     void GetKinkHits(const pandora::CaloHitList &segment, pandora::CaloHitList &kinkHits) const;
     float GetKinkAngle(const pandora::CartesianVector &thisHitPos, const pandora::CaloHitList &preHits, const pandora::CaloHitList &postHits) const;
     unsigned int GetIndexWithMaxKinkAngle(const std::vector<std::pair<unsigned int, float> > &hitIndexCosThetaBunch) const;
-
     void GetBifurcationHits(const std::vector<pandora::CaloHitList> &continuousSegments, const HitSeparationMap &separationMap, pandora::CaloHitList &bifurcationHits) const;
 
-    pandora::StringVector m_pfoListNames;        ///< The input vector of pfo list names
-    std::string           m_vertexListName;      ///< The input list of vectors - must be of size one: the neutrino vertex
-    float                 m_isolatedHitDistance; ///< The separation distance from all other hits for to be considered isolated
-    float                 m_stitchingThreshold;  ///< The threshold distance within which two segments of hits should be stitched
-    float                 m_transverseBias;      ///< The amount by which we bias the transverse coordinate over the longitudinal when finding the nearest neighbor
-    int                   m_nSampleHits;         ///< The number of hits to sample either side of a given hit to find a kink
-    float                 m_cosAngleThreshold;   ///< The cosine angle below which we identify a kink
+    void Get3DSplitPoints(const pandora::CaloHitList &allHits, const pandora::CaloHitList &splitHits, std::vector<SplitPoint3D> &splitPoints3D) const;
+    void OrganiseHitsByView(const pandora::CaloHitList &allHits, pandora::CaloHitList &hitsU, pandora::CaloHitList &hitsV, pandora::CaloHitList &hitsW) const;
+
+    bool MakeThreeViewMatch(pandora::CaloHitList &hitsU, pandora::CaloHitList &hitsV, pandora::CaloHitList &hitsW, std::vector<SplitPoint3D> &splitPoints3D) const;
+    bool MakeTwoViewMatch(const pandora::CaloHitList &allHitsU, const pandora::CaloHitList &allHitsV, const pandora::CaloHitList &allHitsW, pandora::CaloHitList &hitsU, pandora::CaloHitList &hitsV, pandora::CaloHitList &hitsW, std::vector<SplitPoint3D> &splitPoints3D) const;
+    void GetViableTwoViewMatches(const pandora::CaloHitList &hitsA, const pandora::CaloHitList &hitsB, const pandora::CaloHitList &hitsC, std::vector<SplitPoint3D> &splitPointsAB) const;
+
+    pandora::StringVector m_pfoListNames;               ///< The input vector of pfo list names
+    std::string           m_vertexListName;             ///< The input list of vectors - must be of size one: the neutrino vertex
+    float                 m_isolatedHitDistance;        ///< The separation distance from all other hits for to be considered isolated
+    float                 m_stitchingThreshold;         ///< The threshold distance within which two segments of hits should be stitched
+    float                 m_transverseBias;             ///< The amount by which we bias the transverse coordinate over the longitudinal when finding the nearest neighbor
+    int                   m_nSampleHits;                ///< The number of hits to sample either side of a given hit to find a kink
+    float                 m_cosAngleThreshold;          ///< The cosine angle below which we identify a kink
+    float                 m_maxMatchDeltaX;             ///< The maxiumum delta X between kink positions to be considered a match between views
+    float                 m_maxMatch3ViewChi2;          ///< The maximum chi2 for kinks from three views to be considered a match
+    float                 m_twoViewProjectionThreshold; ///< The threshold distance for a 2-view match when we project the 3D position into the remaining view
 };
 
 } // namespace lar_content
