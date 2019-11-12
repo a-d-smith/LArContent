@@ -84,6 +84,7 @@ private:
     };
 
     typedef std::map<const pandora::CaloHit *const, std::map<const pandora::CaloHit *const, float> > HitSeparationMap;
+    typedef std::map<const pandora::CaloHit *, std::vector<const pandora::CaloHit *> > CaloHitHierarchyMap;
 
     pandora::StatusCode ReadSettings(const pandora::TiXmlHandle xmlHandle);
 
@@ -102,12 +103,21 @@ private:
     void CollectInputPfos(pandora::PfoList &inputPfos) const;
 
     /**
-     *  @brief  Get the mapping between pairs of hits and their separation, only stored if separation is within isolated hit distance threshold
+     *  @brief  Get the mapping between pairs of hits and their separation, only stored if separation is within the isolated hit distance threshold
      *
      *  @param  caloHitList the input list of calo hits
      *  @param  separationMap the output separation map
      */
     void GetHitSeparationMap(const pandora::CaloHitList &caloHitList, HitSeparationMap &separationMap) const;
+
+    /**
+     *  @brief  Get the mapping between pairs of hits and their separation, only stored if separation is within the user specified isolated hit distance threshold
+     *
+     *  @param  caloHitList the input list of calo hits
+     *  @param  separationMap the output separation map
+     *  @param  isolatedHitDistance the isolated hit distanc threshold
+     */
+    void GetHitSeparationMap(const pandora::CaloHitList &caloHitList, HitSeparationMap &separationMap, const float isolatedHitDistance) const;
 
     /**
      *  @brief  Get the continuous hit segments by linking hits via nearest neighbor
@@ -170,7 +180,24 @@ private:
      */
     void StitchSegments(const std::vector<pandora::CaloHitList> &initialSegments, std::vector<pandora::CaloHitList> &stitchedSegments) const;
 
+    /**
+     *  @brief  Build the hierarchy of hits
+     *
+     *  @param  pVertex the neutrino vertex
+     *  @param  continuousSegments the input vector of continuous segments
+     *  @param  hitHierarchy the ouput hit hierarchy map
+     */
+    void BuildHitHierarchy(const pandora::Vertex *const pVertex, const std::vector<pandora::CaloHitList> &continuousSegments, CaloHitHierarchyMap &hitHierarchy) const;
+
+
     // TODO doxygen comments
+    void BuildInitialHitHierarchy(const pandora::CaloHitList &segment, const pandora::CaloHit *const pSeedHit, CaloHitHierarchyMap &hitHierarchy) const;
+    void MakeBestHierarchyLink(const HitSeparationMap &separationMap, std::vector<pandora::CaloHitList> &orphanSegments, CaloHitHierarchyMap &hitHierarchy) const;
+    void AddSegmentToHitHierarchy(const unsigned int nearestSegmentIndex, const bool matchFront, const pandora::CaloHit *const pNearestHit, std::vector<pandora::CaloHitList> &orphanSegments, CaloHitHierarchyMap &hitHierarchy) const;
+
+
+
+    void PrintHitHierarchyMap(const CaloHitHierarchyMap &hitHierarchy, const pandora::CaloHit *const pSeedHit, const unsigned int depth) const;
     void GetSplitHits(const std::vector<pandora::CaloHitList> &continuousSegments, const HitSeparationMap &separationMap, pandora::CaloHitList &splitHits) const;
     void GetKinkHits(const pandora::CaloHitList &segment, pandora::CaloHitList &kinkHits) const;
     float GetKinkAngle(const pandora::CartesianVector &thisHitPos, const pandora::CaloHitList &preHits, const pandora::CaloHitList &postHits) const;
@@ -185,6 +212,7 @@ private:
     void GetViableTwoViewMatches(const pandora::CaloHitList &hitsA, const pandora::CaloHitList &hitsB, const pandora::CaloHitList &hitsC, std::vector<SplitPoint3D> &splitPointsAB) const;
 
     pandora::StringVector m_pfoListNames;               ///< The input vector of pfo list names
+    //pandora::StringVector m_clusterListNames;
     std::string           m_vertexListName;             ///< The input list of vectors - must be of size one: the neutrino vertex
     float                 m_isolatedHitDistance;        ///< The separation distance from all other hits for to be considered isolated
     float                 m_stitchingThreshold;         ///< The threshold distance within which two segments of hits should be stitched
