@@ -37,9 +37,9 @@ StatusCode SecondaryInteractionsAlgorithm::Run()
 {
     /* BEGIN DEBUG */
     std::vector<Color> colors = {RED, GREEN, BLUE, MAGENTA, CYAN, VIOLET, PINK};
-    PANDORA_MONITORING_API(SetEveDisplayParameters(this->GetPandora(), true, DETECTOR_VIEW_XZ, -1.f, 1.f, 1.f));
+    //PANDORA_MONITORING_API(SetEveDisplayParameters(this->GetPandora(), true, DETECTOR_VIEW_XZ, -1.f, 1.f, 1.f));
     /* END DEBUG */
-
+        
     // Get the input collections
     PfoList inputPfos;
     this->CollectInputPfos(inputPfos);
@@ -65,8 +65,40 @@ StatusCode SecondaryInteractionsAlgorithm::Run()
             
             // Get the hits that sit at a kink or bifurcation position
             this->GetSplitHits(segments, separationMap, splitHits);
+            
+            CaloHitHierarchyMap hitHierarchy;
+            this->BuildHitHierarchy(pVertex, segments, hitHierarchy);
+            
+            //// BEGIN DEBUG
+            PANDORA_MONITORING_API(VisualizeCaloHits(this->GetPandora(), &caloHits, "AllHits" + std::to_string(view), AUTO));
+            for (const auto &pCaloHit : caloHits)
+            {
+                const auto iter = hitHierarchy.find(pCaloHit);
+                if (iter == hitHierarchy.end())
+                    continue;
+
+                for (const auto &pDaughterHit : iter->second)
+                {
+                    const auto start = pCaloHit->GetPositionVector();
+                    const auto end = pDaughterHit->GetPositionVector();
+                    
+                    const auto dir = (end - start).GetUnitVector();
+                    const auto orthDir = dir.GetCrossProduct(CartesianVector(0.f, 1.f, 0.f));
+
+                    const auto arrowEndA = end - (dir*0.1) + (orthDir*0.1);
+                    const auto arrowEndB = end - (dir*0.1) - (orthDir*0.1);
+
+                    PANDORA_MONITORING_API(AddLineToVisualization(this->GetPandora(), &start, &end, "", RED, 1, 1));
+                    PANDORA_MONITORING_API(AddLineToVisualization(this->GetPandora(), &end, &arrowEndA, "", RED, 1, 1));
+                    PANDORA_MONITORING_API(AddLineToVisualization(this->GetPandora(), &end, &arrowEndB, "", RED, 1, 1));
+                }
+            }
+            PANDORA_MONITORING_API(ViewEvent(this->GetPandora()));
+
+            //// END DEBUG
         
-            /* BEGIN DEBUG */
+            //// BEGIN DEBUG
+            /*
             PANDORA_MONITORING_API(VisualizeCaloHits(this->GetPandora(), &caloHits, "AllHits" + std::to_string(view), AUTO));
 
             for (unsigned int i = 0; i < segments.size(); ++i)
@@ -77,13 +109,17 @@ StatusCode SecondaryInteractionsAlgorithm::Run()
                 const auto color = colors.at(i % colors.size());
                 PANDORA_MONITORING_API(VisualizeCaloHits(this->GetPandora(), &hits, name, color));
             }
-            /* END DEBUG */
+        
+            PANDORA_MONITORING_API(ViewEvent(this->GetPandora()));
+            */
+            //// END DEBUG
         }
        
+        /*
         std::vector<SplitPoint3D> splitPoints3D;
         this->Get3DSplitPoints(allHits, splitHits, splitPoints3D);
 
-        /* BEGIN DEBUG */
+        //// BEGIN DEBUG
         std::cout << "2D split hits" << std::endl;
         for (unsigned int i = 0; i < splitHits.size(); ++i)
         {
@@ -115,7 +151,8 @@ StatusCode SecondaryInteractionsAlgorithm::Run()
         }
 
         PANDORA_MONITORING_API(ViewEvent(this->GetPandora()));
-        /* END DEBUG */
+        //// END DEBUG
+        */
     }
 
     return STATUS_CODE_SUCCESS;
@@ -151,7 +188,14 @@ void SecondaryInteractionsAlgorithm::CollectInputPfos(PfoList &inputPfos) const
 
 void SecondaryInteractionsAlgorithm::GetHitSeparationMap(const CaloHitList &caloHitList, HitSeparationMap &separationMap) const
 {
-    const auto isolatedHitDistanceSquared = m_isolatedHitDistance * m_isolatedHitDistance;
+    this->GetHitSeparationMap(caloHitList, separationMap, m_isolatedHitDistance);
+}
+
+// -----------------------------------------------------------------------------------------------------------------------------------------
+
+void SecondaryInteractionsAlgorithm::GetHitSeparationMap(const CaloHitList &caloHitList, HitSeparationMap &separationMap, const float isolatedHitDistance) const
+{
+    const auto isolatedHitDistanceSquared = isolatedHitDistance * isolatedHitDistance;
 
     unsigned int i = 0;
     for (const auto &pHitI : caloHitList)
@@ -396,6 +440,223 @@ void SecondaryInteractionsAlgorithm::StitchSegments(const std::vector<CaloHitLis
             // Remove the second segment
             stitchedSegments.erase(std::next(stitchedSegments.begin(), stitchIndexJ));
         }
+    }
+}
+
+// -----------------------------------------------------------------------------------------------------------------------------------------
+
+void SecondaryInteractionsAlgorithm::BuildHitHierarchy(const pandora::Vertex *const pVertex, const std::vector<CaloHitList> &continuousSegments, CaloHitHierarchyMap &hitHierarchy) const
+{
+    // Collect all of the hits into a single list
+    CaloHitList allHits;
+    for (const auto &segment : continuousSegments)
+        allHits.insert(allHits.end(), segment.begin(), segment.end());
+
+    if (allHits.empty())
+        return;
+    
+    // Build a separation map with no thresholding
+    HitSeparationMap separationMap;
+    this->GetHitSeparationMap(allHits, separationMap, std::numeric_limits<float>::max());
+
+    // Make the initial hierarchy map with the segment that is closest to the vertex and mark all others as orphans
+    std::vector<CaloHitList> orphanSegments;
+    const auto pSeedHit = this->GetClosestHitToVertex(allHits, pVertex);
+    for (const auto &segment : continuousSegments)
+    {
+        // If the segment doesn't contain the seed hit call it an orphan
+        if (std::find(segment.begin(), segment.end(), pSeedHit) == segment.end())
+        {
+            orphanSegments.push_back(segment);
+        }
+        else
+        {
+            this->BuildInitialHitHierarchy(segment, pSeedHit, hitHierarchy);
+        }
+    }
+    
+    // Keep making the best possible match until there are no more orphans
+    while (!orphanSegments.empty())
+    {
+        this->MakeBestHierarchyLink(separationMap, orphanSegments, hitHierarchy);
+    }
+            
+    //this->PrintHitHierarchyMap(hitHierarchy, pSeedHit, 0);
+}
+
+// -----------------------------------------------------------------------------------------------------------------------------------------
+
+void SecondaryInteractionsAlgorithm::BuildInitialHitHierarchy(const CaloHitList &segment, const CaloHit *const pSeedHit, CaloHitHierarchyMap &hitHierarchy) const
+{
+    if (!hitHierarchy.empty())
+        throw StatusCodeException(STATUS_CODE_INVALID_PARAMETER);
+
+    if (segment.empty())
+        throw StatusCodeException(STATUS_CODE_INVALID_PARAMETER);
+
+    const auto seedHitIter = std::find(segment.begin(), segment.end(), pSeedHit);
+    if (seedHitIter == segment.end())
+        throw StatusCodeException(STATUS_CODE_NOT_FOUND);
+
+    // If the seed hit is the only one in the input list, then it has no daughters
+    if (segment.size() == 1)
+    {
+        hitHierarchy.emplace(*seedHitIter, std::vector<const CaloHit *>());
+        return;
+    }
+   
+    // Move forward through the list from the seed hit
+    auto hitIter = seedHitIter;
+    while (std::next(hitIter) != segment.end())
+    {
+        hitHierarchy[*hitIter].push_back(*std::next(hitIter));
+        std::advance(hitIter, 1);
+    }
+
+    // Move backward through the list from the seed hit
+    hitIter = seedHitIter;
+    while (hitIter != segment.begin())
+    {
+        hitHierarchy[*hitIter].push_back(*std::prev(hitIter));
+        std::advance(hitIter, -1);
+    }
+}
+
+// -----------------------------------------------------------------------------------------------------------------------------------------
+
+void SecondaryInteractionsAlgorithm::MakeBestHierarchyLink(const HitSeparationMap &separationMap, std::vector<CaloHitList> &orphanSegments, CaloHitHierarchyMap &hitHierarchy) const
+{
+    if (orphanSegments.empty())
+        return;
+
+    // Extract all of the hits from the hit hierarchy so far
+    CaloHitList allHitsInHierarchy;
+    for (const auto &entry : hitHierarchy)
+    {
+        // Parent hits
+        const auto pParentHit = entry.first;
+        if (std::find(allHitsInHierarchy.begin(), allHitsInHierarchy.end(), pParentHit) == allHitsInHierarchy.end())
+            allHitsInHierarchy.push_back(pParentHit);
+
+        // Daughter hits
+        for (const auto &pDaughterHit : entry.second)
+        {
+            if (std::find(allHitsInHierarchy.begin(), allHitsInHierarchy.end(), pDaughterHit) == allHitsInHierarchy.end())
+                allHitsInHierarchy.push_back(pDaughterHit);
+        }
+    }
+
+    if (allHitsInHierarchy.empty())
+        throw StatusCodeException(STATUS_CODE_INVALID_PARAMETER);
+
+    float minHitDistSquared = std::numeric_limits<float>::max();
+    unsigned int nearestSegmentIndex = 0;
+    const CaloHit *pNearestHit = nullptr;
+    bool matchFront = true;
+
+    for (unsigned int i = 0; i < orphanSegments.size(); i++)
+    {
+        const auto segment = orphanSegments.at(i);
+
+        // Check the first hit in the segment for a neighbor
+        const auto pFrontHit = segment.front();
+        const auto pFrontNextHit = *std::next(segment.begin(), segment.size() == 1 ? 0 : 1);
+
+        const CaloHit *pNearestFrontHit = nullptr;
+        if (!this->GetNearestNeighbor(separationMap, allHitsInHierarchy, pFrontNextHit, pFrontHit, pNearestFrontHit))
+            throw StatusCodeException(STATUS_CODE_NOT_FOUND);
+
+        const auto frontHitDistSquared = pFrontHit->GetPositionVector().GetDistanceSquared(pNearestFrontHit->GetPositionVector());
+
+        // Check the last hit in the segment for a neighbor
+        const auto pBackHit = segment.back();
+        const auto pBackPrevHit = *std::prev(segment.end(), segment.size() == 1 ? 1 : 2); // ATTN here we go back 1 or 2 since end() points to the position after the back hit
+
+        const CaloHit *pNearestBackHit = nullptr;
+        if (!this->GetNearestNeighbor(separationMap, allHitsInHierarchy, pBackPrevHit, pBackHit, pNearestBackHit))
+            throw StatusCodeException(STATUS_CODE_NOT_FOUND);
+        
+        const auto backHitDistSquared = pBackHit->GetPositionVector().GetDistanceSquared(pNearestBackHit->GetPositionVector());
+
+        // Get the closest of the two hits
+        const auto nearestHitDistSquared = std::min(frontHitDistSquared, backHitDistSquared);
+
+        // Check if this is the closest so far
+        if (nearestHitDistSquared < minHitDistSquared)
+        {
+            minHitDistSquared = nearestHitDistSquared;
+            nearestSegmentIndex = i;
+            matchFront = (frontHitDistSquared < backHitDistSquared);
+            pNearestHit = matchFront ? pNearestFrontHit : pNearestBackHit;
+        }
+    }
+
+    // Make the link
+    this->AddSegmentToHitHierarchy(nearestSegmentIndex, matchFront, pNearestHit, orphanSegments, hitHierarchy);
+}
+
+// -----------------------------------------------------------------------------------------------------------------------------------------
+
+void SecondaryInteractionsAlgorithm::AddSegmentToHitHierarchy(const unsigned int nearestSegmentIndex, const bool matchFront, const CaloHit *const pNearestHit, std::vector<CaloHitList> &orphanSegments, CaloHitHierarchyMap &hitHierarchy) const
+{
+    auto &nearestHitDaughters = hitHierarchy[pNearestHit];
+    const auto segment = orphanSegments.at(nearestSegmentIndex);
+
+    if (matchFront)
+    {
+        // Move forward through the list from the seed hit
+        nearestHitDaughters.push_back(segment.front());
+        auto hitIter = segment.begin();
+        while (std::next(hitIter) != segment.end())
+        {
+            hitHierarchy[*hitIter].push_back(*std::next(hitIter));
+            std::advance(hitIter, 1);
+        }
+    }
+    else
+    {
+        // Move backward through the list from the seed hit
+        nearestHitDaughters.push_back(segment.back());
+        auto hitIter = segment.end();
+        while (hitIter != segment.begin())
+        {
+            hitHierarchy[*hitIter].push_back(*std::prev(hitIter));
+            std::advance(hitIter, -1);
+        }
+    }
+
+    orphanSegments.erase(std::next(orphanSegments.begin(), nearestSegmentIndex));
+}
+
+// -----------------------------------------------------------------------------------------------------------------------------------------
+
+void SecondaryInteractionsAlgorithm::PrintHitHierarchyMap(const CaloHitHierarchyMap &hitHierarchy, const CaloHit *const pSeedHit, const unsigned int depth) const
+{
+    std::cout << std::string(depth * 4, ' ') << " - " << pSeedHit;
+
+    const auto iter = hitHierarchy.find(pSeedHit);
+    if (iter != hitHierarchy.end())
+    {
+        const auto daughters = iter->second;
+        const auto nDaughters = daughters.size();
+        std::cout << " (" << nDaughters << ") ";
+
+        if (nDaughters > 1)
+        {
+            std::cout << " -> ";
+            for (const auto pDaughterHit : daughters)
+                std::cout << pDaughterHit << "  ";
+        }
+        std::cout << std::endl;
+
+        for (const auto pDaughterHit : daughters)
+        {
+            this->PrintHitHierarchyMap(hitHierarchy, pDaughterHit, depth + ((nDaughters == 1) ? 0 : 1));
+        }
+    }
+    else
+    {
+        std::cout << " (X) " << std::endl << std::endl;
     }
 }
 
@@ -929,6 +1190,8 @@ const CaloHit *SecondaryInteractionsAlgorithm::SplitPoint3D::GetHitWithView(cons
 
 StatusCode SecondaryInteractionsAlgorithm::ReadSettings(const TiXmlHandle xmlHandle)
 {
+    //PANDORA_RETURN_RESULT_IF(STATUS_CODE_SUCCESS, !=, XmlHelper::ReadVectorOfValues(xmlHandle, "ClusterListNames", m_clusterListNames));
+
     PANDORA_RETURN_RESULT_IF(STATUS_CODE_SUCCESS, !=, XmlHelper::ReadVectorOfValues(xmlHandle, "PfoListNames", m_pfoListNames));
     PANDORA_RETURN_RESULT_IF(STATUS_CODE_SUCCESS, !=, XmlHelper::ReadValue(xmlHandle, "VertexListName", m_vertexListName));
 
