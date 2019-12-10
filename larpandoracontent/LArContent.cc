@@ -47,6 +47,8 @@
 #include "larpandoracontent/LArMonitoring/EventValidationAlgorithm.h"
 #include "larpandoracontent/LArMonitoring/MCParticleMonitoringAlgorithm.h"
 #include "larpandoracontent/LArMonitoring/VisualMonitoringAlgorithm.h"
+#include "larpandoracontent/LArMonitoring/PrintAlgorithm.h"
+#include "larpandoracontent/LArMonitoring/GapMonitoringAlgorithm.h"
 #include "larpandoracontent/LArMonitoring/PfoValidationAlgorithm.h"
 #include "larpandoracontent/LArMonitoring/ShowerTensorVisualizationTool.h"
 #include "larpandoracontent/LArMonitoring/TransverseTensorVisualizationTool.h"
@@ -183,6 +185,8 @@
     d("LArPfoValidation",                       PfoValidationAlgorithm)                                                         \
     d("LArMCParticleMonitoring",                MCParticleMonitoringAlgorithm)                                                  \
     d("LArVisualMonitoring",                    VisualMonitoringAlgorithm)                                                      \
+    d("LArGapMonitoring",                       GapMonitoringAlgorithm)                                                         \
+    d("LArPrint",                               PrintAlgorithm)                                                                 \
     d("LArEventReading",                        EventReadingAlgorithm)                                                          \
     d("LArEventWriting",                        EventWritingAlgorithm)                                                          \
     d("LArCheatingClusterCharacterisation",     CheatingClusterCharacterisationAlgorithm)                                       \

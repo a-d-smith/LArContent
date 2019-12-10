@@ -1,0 +1,1502 @@
+/**
+ *  @file   larpandoracontent/LArThreeDReco/LArSecondaryInteractions/SecondaryInteractionsAlgorithm.cc
+ *
+ *  @brief  Implementation of the secondary interactions algorithm class
+ *
+ *  $Log: $
+ */
+
+#include "Pandora/AlgorithmHeaders.h"
+
+#include "larpandoracontent/LArThreeDReco/LArSecondaryInteractions/SecondaryInteractionsAlgorithm.h"
+
+#include "larpandoracontent/LArHelpers/LArPfoHelper.h"
+#include "larpandoracontent/LArHelpers/LArGeometryHelper.h"
+#include "larpandoracontent/LArHelpers/LArPcaHelper.h"
+#include "larpandoracontent/LArHelpers/LArFormattingHelper.h"
+
+using namespace pandora;
+
+namespace lar_content
+{
+
+SecondaryInteractionsAlgorithm::SecondaryInteractionsAlgorithm() :
+    m_isolatedHitDistance(2.f),
+    m_stitchingThreshold(1.f),
+    m_transverseBias(2.f),
+    m_nSampleHits(5),
+    m_cosAngleThreshold(0.9),
+    m_maxMatchDeltaX(0.6f),
+    m_maxMatch3ViewChi2(1.f),
+    m_twoViewProjectionThreshold(1.8f)
+{
+}
+
+// -----------------------------------------------------------------------------------------------------------------------------------------
+
+StatusCode SecondaryInteractionsAlgorithm::Run()
+{
+    /* BEGIN DEBUG */
+    std::vector<Color> colors = {RED, GREEN, BLUE, MAGENTA, CYAN, VIOLET, PINK};
+    PANDORA_MONITORING_API(SetEveDisplayParameters(this->GetPandora(), false, DETECTOR_VIEW_XZ, -1.f, 1.f, 1.f));
+    /* END DEBUG */
+               
+    std::string newPfoListName;
+    const PfoList *pNewPfoList(nullptr);
+    PfoList pfosToSave, pfosToDelete;
+    PANDORA_RETURN_RESULT_IF(STATUS_CODE_SUCCESS, !=, PandoraContentApi::CreateTemporaryListAndSetCurrent(*this, pNewPfoList, newPfoListName));
+
+    // Get the input collections
+    PfoList inputPfos;
+    this->CollectInputPfos(inputPfos);
+    const auto pVertex = this->GetVertex();
+    
+    std::cout << "nPfos input: " << inputPfos.size() << std::endl;
+
+    //// BEGIN DEBUG
+    /*
+    CaloHitList fullEventHitsU;
+    CaloHitList fullEventHitsV;
+    CaloHitList fullEventHitsW;
+    for (const auto &pPfo : inputPfos)
+    {
+        LArPfoHelper::GetCaloHits(pPfo, TPC_VIEW_U, fullEventHitsU);
+        LArPfoHelper::GetCaloHits(pPfo, TPC_VIEW_V, fullEventHitsV);
+        LArPfoHelper::GetCaloHits(pPfo, TPC_VIEW_W, fullEventHitsW);
+    }
+    */
+    //// END DEBUG
+
+    for (const auto &pPfo : inputPfos)
+    {
+        //// DEBUG
+        /*
+        LArFormattingHelper::Table table({"Address", "PDG", "", "Parent", "nDaughters", "", "1", "2", "3", "4", "5"});
+        for (const auto &pPfoPrint : inputPfos)
+        {
+            table.AddElement(pPfoPrint, (pPfoPrint == pPfo) ? LArFormattingHelper::INVERTED : LArFormattingHelper::REGULAR);
+            table.AddElement(pPfoPrint->GetParticleId());
+
+            const auto parents = pPfoPrint->GetParentPfoList();
+            if (parents.empty())
+            {
+                table.AddElement("");
+            }
+            else
+            {
+                table.AddElement(parents.front(), (parents.front() == pPfo) ? LArFormattingHelper::INVERTED : LArFormattingHelper::REGULAR);
+            }
+
+            table.AddElement(pPfoPrint->GetNDaughterPfos());
+
+            const auto daughters = pPfoPrint->GetDaughterPfoList();
+            for (unsigned int i = 0; i < 5; ++i)
+            {
+                if (i >= daughters.size())
+                {
+                    table.AddElement("");
+                }
+                else
+                {
+                    const auto pDaughterPfo = *std::next(daughters.begin(), i);
+                    table.AddElement(pDaughterPfo, (pDaughterPfo == pPfo) ? LArFormattingHelper::INVERTED : LArFormattingHelper::REGULAR);
+                }
+            }
+        }
+        table.Print();
+
+        PANDORA_MONITORING_API(VisualizeCaloHits(this->GetPandora(), &fullEventHitsU, "FullEventU", AUTO));
+        PANDORA_MONITORING_API(VisualizeCaloHits(this->GetPandora(), &fullEventHitsV, "FullEventV", AUTO));
+        PANDORA_MONITORING_API(VisualizeCaloHits(this->GetPandora(), &fullEventHitsW, "FullEventW", AUTO));
+        */
+        //// END DEBUG
+        
+        CaloHitList splitHits;
+        CaloHitList allHits;
+        std::map<HitType, CaloHitHierarchyMap> hitHierarchies;
+        std::map<HitType, const CaloHit *> seedHits;
+
+        for (const auto &view : {TPC_VIEW_U, TPC_VIEW_V, TPC_VIEW_W})
+        {
+            // Collect the calo hits
+            CaloHitList caloHits;
+            LArPfoHelper::GetCaloHits(pPfo, view, caloHits);
+            allHits.insert(allHits.end(), caloHits.begin(), caloHits.end());
+
+            HitSeparationMap separationMap;
+            this->GetHitSeparationMap(caloHits, separationMap);
+            
+            // Organise the hits into continuous segments
+            std::vector<CaloHitList> segments;
+            this->GetContinuousSegments(pVertex, caloHits, separationMap, segments);
+            
+            auto &hitHierarchy = hitHierarchies[view];
+            auto &pSeedHit = seedHits[view];
+            this->BuildHitHierarchy(pVertex, segments, hitHierarchy, pSeedHit);
+            
+            // Get the hits that sit at a kink or bifurcation position
+            CaloHitList candidateSplitHits;
+            this->GetSplitHits(segments, separationMap, candidateSplitHits);
+            splitHits.insert(splitHits.end(), candidateSplitHits.begin(), candidateSplitHits.end());
+            
+            //// BEGIN DEBUG
+            PANDORA_MONITORING_API(VisualizeCaloHits(this->GetPandora(), &caloHits, "AllHits" + std::to_string(view), AUTO));
+            /*
+            PANDORA_MONITORING_API(VisualizeCaloHits(this->GetPandora(), &caloHits, "AllHits" + std::to_string(view), AUTO));
+            for (const auto &pCaloHit : caloHits)
+            {
+                const auto iter = hitHierarchy.find(pCaloHit);
+                if (iter == hitHierarchy.end())
+                    continue;
+
+                for (const auto &pDaughterHit : iter->second)
+                {
+                    const auto start = pCaloHit->GetPositionVector();
+                    const auto end = pDaughterHit->GetPositionVector();
+                    
+                    const auto dir = (end - start).GetUnitVector();
+                    const auto orthDir = dir.GetCrossProduct(CartesianVector(0.f, 1.f, 0.f));
+
+                    const auto arrowEndA = end - (dir*0.1) + (orthDir*0.1);
+                    const auto arrowEndB = end - (dir*0.1) - (orthDir*0.1);
+
+                    PANDORA_MONITORING_API(AddLineToVisualization(this->GetPandora(), &start, &end, "", RED, 1, 1));
+                    PANDORA_MONITORING_API(AddLineToVisualization(this->GetPandora(), &end, &arrowEndA, "", RED, 1, 1));
+                    PANDORA_MONITORING_API(AddLineToVisualization(this->GetPandora(), &end, &arrowEndB, "", RED, 1, 1));
+                }
+            }
+            //PANDORA_MONITORING_API(ViewEvent(this->GetPandora()));
+            */
+            //// END DEBUG
+        
+            //// BEGIN DEBUG
+            /*
+            for (unsigned int i = 0; i < segments.size(); ++i)
+            {
+                const auto hits = segments.at(i);
+
+                const auto name = "Segment" + std::to_string(i);
+                const auto color = colors.at(i % colors.size());
+                PANDORA_MONITORING_API(VisualizeCaloHits(this->GetPandora(), &hits, name, color));
+            }
+            //PANDORA_MONITORING_API(ViewEvent(this->GetPandora()));
+            */
+            //// END DEBUG
+        }
+       
+        std::vector<SplitPoint3D> splitPoints3D;
+        this->Get3DSplitPoints(allHits, splitHits, splitPoints3D);
+
+        //// BEGIN DEBUG
+        const auto vertexPos = pVertex->GetPosition();
+        const auto vertexU = LArGeometryHelper::ProjectPosition(this->GetPandora(), vertexPos, TPC_VIEW_U);
+        const auto vertexV = LArGeometryHelper::ProjectPosition(this->GetPandora(), vertexPos, TPC_VIEW_V);
+        const auto vertexW = LArGeometryHelper::ProjectPosition(this->GetPandora(), vertexPos, TPC_VIEW_W);
+        PANDORA_MONITORING_API(AddMarkerToVisualization(this->GetPandora(), &vertexU, "vertexU", PINK, 1));
+        PANDORA_MONITORING_API(AddMarkerToVisualization(this->GetPandora(), &vertexV, "vertexV", PINK, 1));
+        PANDORA_MONITORING_API(AddMarkerToVisualization(this->GetPandora(), &vertexW, "vertexW", PINK, 1));
+
+        std::cout << "N 2D split hits: " << splitHits.size() << std::endl;
+        for (unsigned int i = 0; i < splitHits.size(); ++i)
+        {
+            const auto kinkPosition = (*std::next(splitHits.begin(), i))->GetPositionVector();
+            const auto name = "Split2D" + std::to_string(i);
+            PANDORA_MONITORING_API(AddMarkerToVisualization(this->GetPandora(), &kinkPosition, name, BLACK, 1));
+        }
+
+        std::cout << "N 3D split hits: " << splitPoints3D.size() << std::endl;
+        for (unsigned int i = 0; i < splitPoints3D.size(); ++i)
+        {
+            const auto splitPosition = splitPoints3D.at(i).m_position3D;
+            const auto name = "Split3D" + std::to_string(i);
+            const auto color = colors.at(i % colors.size());
+            
+            const auto splitPositionU = LArGeometryHelper::ProjectPosition(this->GetPandora(), splitPosition, TPC_VIEW_U);
+            const auto splitPositionV = LArGeometryHelper::ProjectPosition(this->GetPandora(), splitPosition, TPC_VIEW_V);
+            const auto splitPositionW = LArGeometryHelper::ProjectPosition(this->GetPandora(), splitPosition, TPC_VIEW_W);
+
+            PANDORA_MONITORING_API(AddMarkerToVisualization(this->GetPandora(), &splitPosition, name, color, 2));
+            PANDORA_MONITORING_API(AddMarkerToVisualization(this->GetPandora(), &splitPositionU, name + "U", color, 2));
+            PANDORA_MONITORING_API(AddMarkerToVisualization(this->GetPandora(), &splitPositionV, name + "V", color, 2));
+            PANDORA_MONITORING_API(AddMarkerToVisualization(this->GetPandora(), &splitPositionW, name + "W", color, 2));
+        }
+
+        PANDORA_MONITORING_API(ViewEvent(this->GetPandora()));
+        //// END DEBUG
+            
+        // Get the parameters of the current PFO
+        PandoraContentApi::ParticleFlowObject::Parameters pfoParameters;
+        pfoParameters.m_particleId = pPfo->GetParticleId();
+        pfoParameters.m_charge = pPfo->GetCharge();
+        pfoParameters.m_mass = pPfo->GetMass();
+        pfoParameters.m_energy = pPfo->GetEnergy();
+        pfoParameters.m_momentum = pPfo->GetMomentum();
+        pfoParameters.m_propertiesToAdd = pPfo->GetPropertiesMap();
+        pfoParameters.m_clusterList.clear();
+        pfoParameters.m_trackList.clear();
+        pfoParameters.m_vertexList.clear();
+
+        //// BEGIN TEST
+        if (!splitPoints3D.empty())
+        {
+            std::cout << "Choosing the split point of " << splitPoints3D.size() << " candidates" << std::endl;
+
+            auto splitPointIter = splitPoints3D.begin();
+            auto bestSplitPointIter = splitPoints3D.begin();
+            float minDistSquared = std::numeric_limits<float>::max();
+
+            while (splitPointIter != splitPoints3D.end())
+            {
+                const auto distSquared = splitPointIter->m_position3D.GetDistanceSquared(pVertex->GetPosition());
+                if (distSquared < minDistSquared)
+                {
+                    bestSplitPointIter = splitPointIter;
+                    minDistSquared = distSquared;
+                }
+
+                std::advance(splitPointIter, 1);
+            }
+            const auto splitPoint3D = *bestSplitPointIter;
+        
+            std::map<HitType, CaloHitList> newClusterHitsA, newClusterHitsB;
+
+            for (const auto &view : {TPC_VIEW_U, TPC_VIEW_V, TPC_VIEW_W})
+            {
+                CaloHitList hitsInView;
+                LArPfoHelper::GetCaloHits(pPfo, view, hitsInView);
+
+                if (hitsInView.empty())
+                    continue;
+
+                // Get the split hit if possible
+                bool hasSplitHit = true;
+                const pandora::CaloHit *pSplitHit = nullptr;
+                try
+                {
+                    pSplitHit = splitPoint3D.GetHitWithView(view);
+                }
+                catch (const StatusCodeException &) { hasSplitHit = false; }
+
+                if (!hasSplitHit)
+                {
+                    // If the split position projects to a gap, then just find the closest hit 
+                    const auto projectedPosition = LArGeometryHelper::ProjectPosition(this->GetPandora(), splitPoint3D.m_position3D, view);
+                    pSplitHit = this->GetClosestHitToPoint(hitsInView, projectedPosition);
+                }
+
+                // Now make the split using the hierarchy
+                const auto &hitHierarchy = hitHierarchies.at(view);
+                auto &downstreamHits = newClusterHitsB[view];
+                auto &upstreamHits = newClusterHitsA[view];
+
+                this->GetDownstreamHits(hitHierarchy, pSplitHit, downstreamHits);
+                for (const auto &pCaloHit : hitsInView)
+                {
+                    if (std::find(downstreamHits.begin(), downstreamHits.end(), pCaloHit) == downstreamHits.end())
+                        upstreamHits.push_back(pCaloHit);
+                }
+            }
+    
+            // Make new pfos for before and after the split
+            const ParticleFlowObject *pOutputPfoA(NULL);
+            const ParticleFlowObject *pOutputPfoB(NULL);
+            PANDORA_THROW_RESULT_IF(STATUS_CODE_SUCCESS, !=, PandoraContentApi::ParticleFlowObject::Create(*this, pfoParameters, pOutputPfoA));
+            PANDORA_THROW_RESULT_IF(STATUS_CODE_SUCCESS, !=, PandoraContentApi::ParticleFlowObject::Create(*this, pfoParameters, pOutputPfoB));
+            pfosToSave.push_back(pOutputPfoA);
+            pfosToSave.push_back(pOutputPfoB);
+
+            // Make the parent daughter link
+            PANDORA_THROW_RESULT_IF(STATUS_CODE_SUCCESS, !=, PandoraContentApi::SetPfoParentDaughterRelationship(*this, pOutputPfoA, pOutputPfoB));
+
+            // Make new clusters before and after the split
+            ClusterList newClustersA, newClustersB;
+            for (const auto &view : {TPC_VIEW_U, TPC_VIEW_V, TPC_VIEW_W})
+            {
+                ClusterList clusters;
+                LArPfoHelper::GetClusters(pPfo, view, clusters);
+           
+                if (clusters.empty())
+                    continue;
+
+                const std::string clusterListName = (view == TPC_VIEW_U ? "ClustersU" : (view == TPC_VIEW_V ? "ClustersV" : "ClustersW"));
+                std::cout << "Switching the cluster list to " << clusterListName << std::endl;
+                const StatusCode listChangeStatusCode(PandoraContentApi::ReplaceCurrentList<Cluster>(*this, clusterListName));
+                if (listChangeStatusCode == STATUS_CODE_NOT_FOUND)
+                    continue;
+
+                if (listChangeStatusCode != STATUS_CODE_SUCCESS)
+                    throw StatusCodeException(listChangeStatusCode);
+
+                std::cout << "I did the switcheroo" << std::endl;
+                
+                for (const auto &pCluster : clusters)
+                {
+                    std::cout << "Schlonging out that clusterooni from the PFO" << std::endl;
+                    PANDORA_RETURN_RESULT_IF(STATUS_CODE_SUCCESS, !=, PandoraContentApi::RemoveFromPfo(*this, pPfo, pCluster));
+                }
+
+                std::cout << "Gonna start the thing.. there are: " << clusters.size() << " clusters in view " << view << std::endl;
+                
+                std::string clusterListToSaveName, clusterListToDeleteName;
+                PANDORA_RETURN_RESULT_IF(STATUS_CODE_SUCCESS, !=, PandoraContentApi::InitializeFragmentation(*this, clusters, clusterListToDeleteName, clusterListToSaveName));
+
+                std::cout << "Okay I started doing the thing." << std::endl;
+
+                PandoraContentApi::Cluster::Parameters clusterParametersA, clusterParametersB;
+                clusterParametersA.m_caloHitList = newClusterHitsA.at(view);
+                clusterParametersB.m_caloHitList = newClusterHitsB.at(view);
+
+                if (!clusterParametersA.m_caloHitList.empty())
+                {
+                    const Cluster *pNewClusterA(nullptr);
+                    PANDORA_THROW_RESULT_IF(STATUS_CODE_SUCCESS, !=, PandoraContentApi::Cluster::Create(*this, clusterParametersA, pNewClusterA));
+                    newClustersA.push_back(pNewClusterA);
+                }
+
+                if (!clusterParametersB.m_caloHitList.empty())
+                {
+                    const Cluster *pNewClusterB(nullptr);
+                    PANDORA_THROW_RESULT_IF(STATUS_CODE_SUCCESS, !=, PandoraContentApi::Cluster::Create(*this, clusterParametersB, pNewClusterB));
+                    newClustersB.push_back(pNewClusterB);
+                }
+                
+                std::cout << "Made some new things..." << std::endl;
+            
+                PANDORA_RETURN_RESULT_IF(STATUS_CODE_SUCCESS, !=, PandoraContentApi::EndFragmentation(*this, clusterListToSaveName, clusterListToDeleteName));
+
+                std::cout << "Boom. Did the thing." << std::endl;
+            }
+                    
+        
+            std::cout << "Adding dem clusters to the new pfos" << std::endl;
+
+            // Add the new clusters to the PFO
+            for (const auto &pCluster : newClustersA)
+                PANDORA_THROW_RESULT_IF(STATUS_CODE_SUCCESS, !=, PandoraContentApi::AddToPfo(*this, pOutputPfoA, pCluster));
+            
+            for (const auto &pCluster : newClustersB)
+                PANDORA_THROW_RESULT_IF(STATUS_CODE_SUCCESS, !=, PandoraContentApi::AddToPfo(*this, pOutputPfoB, pCluster));
+        
+            std::cout << "Boom. Done it." << std::endl;
+
+            pfosToDelete.push_back(pPfo);
+        }
+        //// END TEST
+    }
+
+    std::cout << "nPfos to save: " << pfosToSave.size() << std::endl;
+    std::cout << "nPfos to delete: " << pfosToDelete.size() << std::endl;
+
+    if (!pfosToSave.empty())
+    {
+        PANDORA_RETURN_RESULT_IF(STATUS_CODE_SUCCESS, !=, PandoraContentApi::SaveList(*this, m_pfoListNames.front(), pfosToSave));
+    }
+   
+    if (!pfosToDelete.empty())
+    {
+        PANDORA_RETURN_RESULT_IF(STATUS_CODE_SUCCESS, !=, PandoraContentApi::ReplaceCurrentList<Pfo>(*this, m_pfoListNames.front()));
+        for (const auto &pPfo : pfosToDelete)
+        {
+            PANDORA_RETURN_RESULT_IF(STATUS_CODE_SUCCESS, !=, PandoraContentApi::Delete(*this, pPfo));
+        }
+    }
+
+    return STATUS_CODE_SUCCESS;
+}
+
+// -----------------------------------------------------------------------------------------------------------------------------------------
+
+const Vertex *SecondaryInteractionsAlgorithm::GetVertex() const
+{
+    const VertexList *pVertexList = nullptr;
+    PANDORA_THROW_RESULT_IF(STATUS_CODE_SUCCESS, !=, PandoraContentApi::GetList(*this, m_vertexListName, pVertexList));
+
+    if (pVertexList->size() != 1)
+        throw StatusCodeException(STATUS_CODE_OUT_OF_RANGE);
+
+    return pVertexList->front();
+}
+
+// -----------------------------------------------------------------------------------------------------------------------------------------
+
+void SecondaryInteractionsAlgorithm::CollectInputPfos(PfoList &inputPfos) const
+{
+    // TODO make this properly
+    if (m_pfoListNames.size() != 1)
+        throw StatusCodeException(STATUS_CODE_INVALID_PARAMETER);
+
+    for (const auto &listName : m_pfoListNames)
+    {
+        const PfoList *pPfoList = nullptr;
+
+        if (PandoraContentApi::GetList(*this, listName, pPfoList) == STATUS_CODE_SUCCESS)
+            inputPfos.insert(inputPfos.end(), pPfoList->begin(), pPfoList->end());
+    }
+}
+
+// -----------------------------------------------------------------------------------------------------------------------------------------
+
+void SecondaryInteractionsAlgorithm::GetHitSeparationMap(const CaloHitList &caloHitList, HitSeparationMap &separationMap) const
+{
+    this->GetHitSeparationMap(caloHitList, separationMap, m_isolatedHitDistance);
+}
+
+// -----------------------------------------------------------------------------------------------------------------------------------------
+
+void SecondaryInteractionsAlgorithm::GetHitSeparationMap(const CaloHitList &caloHitList, HitSeparationMap &separationMap, const float isolatedHitDistance) const
+{
+    const auto isolatedHitDistanceSquared = isolatedHitDistance * isolatedHitDistance;
+
+    unsigned int i = 0;
+    for (const auto &pHitI : caloHitList)
+    {
+        unsigned int j = 0;
+        for (const auto &pHitJ : caloHitList)
+        {
+            if (j >= i)
+                continue;
+
+            const auto distSquared = (pHitI->GetPositionVector() - pHitJ->GetPositionVector()).GetMagnitudeSquared();
+
+            if (distSquared < isolatedHitDistanceSquared)
+            {
+                separationMap[pHitI][pHitJ] = distSquared;
+                separationMap[pHitJ][pHitI] = distSquared;
+            }
+
+            j++;
+        }
+        i++;
+    }
+}
+
+// -----------------------------------------------------------------------------------------------------------------------------------------
+
+void SecondaryInteractionsAlgorithm::GetContinuousSegments(const Vertex *const pVertex, const CaloHitList &caloHitList, const HitSeparationMap &separationMap, std::vector<CaloHitList> &continuousSegments) const
+{
+    // We don't need to order 0 or 1 hit
+    if (caloHitList.size() < 2)
+    {
+        continuousSegments.push_back(caloHitList);
+        return;
+    }
+
+    CaloHitList remainingHits = caloHitList;
+    std::vector<CaloHitList> initialSegments;
+
+    while (!remainingHits.empty())
+    {
+        const auto pSeedHit = this->GetClosestHitToVertex(remainingHits, pVertex);
+
+        CaloHitList segment;
+        this->CollectHitsInSegment(pSeedHit, separationMap, remainingHits, segment);
+        initialSegments.push_back(segment);
+    }
+
+    this->StitchSegments(initialSegments, continuousSegments);
+}
+
+// -----------------------------------------------------------------------------------------------------------------------------------------
+
+const CaloHit *SecondaryInteractionsAlgorithm::GetClosestHitToPoint(const CaloHitList &caloHitList, const CartesianVector &point) const
+{
+    if (caloHitList.empty())
+        throw StatusCodeException(STATUS_CODE_INVALID_PARAMETER);
+
+    float minDistanceSquared = std::numeric_limits<float>::max();
+    const CaloHit *pClosestHit = nullptr;
+    for (const auto &pHit : caloHitList)
+    {
+        const auto distSquared = pHit->GetPositionVector().GetDistanceSquared(point);
+        if (distSquared > minDistanceSquared)
+            continue;
+
+        minDistanceSquared = distSquared;
+        pClosestHit = pHit;
+    }
+
+    if (!pClosestHit)
+        throw StatusCodeException(STATUS_CODE_NOT_FOUND);
+
+    return pClosestHit;
+}
+
+// -----------------------------------------------------------------------------------------------------------------------------------------
+
+const CaloHit *SecondaryInteractionsAlgorithm::GetClosestHitToVertex(const CaloHitList &caloHitList, const Vertex *const pVertex) const
+{
+    if (caloHitList.empty())
+        throw StatusCodeException(STATUS_CODE_INVALID_PARAMETER);
+
+    // ATTN here we assume that all hits in the input list are of the same type as the first
+    const auto hitType = caloHitList.front()->GetHitType();
+    const auto is2D = (hitType == TPC_VIEW_U || hitType == TPC_VIEW_V || hitType == TPC_VIEW_W);
+    const auto is3D = (hitType == TPC_3D);
+    
+    if (!is2D && !is3D)
+        throw StatusCodeException(STATUS_CODE_INVALID_PARAMETER);
+
+    // Project the 3D vertex position into the desired view - if applicable
+    const auto vertexPosition3D = pVertex->GetPosition();
+    const auto vertexPosition = (is2D ? LArGeometryHelper::ProjectPosition(this->GetPandora(), vertexPosition3D, hitType) : vertexPosition3D);
+
+    return this->GetClosestHitToPoint(caloHitList, vertexPosition);
+}
+
+// -----------------------------------------------------------------------------------------------------------------------------------------
+
+void SecondaryInteractionsAlgorithm::CollectHitsInSegment(const CaloHit *const pSeedHit, const HitSeparationMap &separationMap, CaloHitList &remainingHits, CaloHitList &segment) const
+{
+    const CaloHit *pLastHit = pSeedHit;
+    const CaloHit *pCurrentHit = pSeedHit;
+
+    while (true)
+    {
+        segment.push_back(pCurrentHit);
+        remainingHits.remove(pCurrentHit);
+
+        const CaloHit *pNextHit = nullptr;
+        if (!this->GetNearestNeighbor(separationMap, remainingHits, pLastHit, pCurrentHit, pNextHit))
+            break;
+
+        pCurrentHit = pNextHit;
+    }
+}
+
+// -----------------------------------------------------------------------------------------------------------------------------------------
+
+bool SecondaryInteractionsAlgorithm::GetNearestNeighbor(const HitSeparationMap &separationMap, const CaloHitList &remainingHits, const CaloHit *const pLastHit, const CaloHit *const pCurrentHit, const CaloHit *&pNextHit) const
+{
+    // Make sure we have an entry for the current hit in the separation map
+    const auto iter = separationMap.find(pCurrentHit);
+    if (iter == separationMap.end())
+        return false;
+
+    // Get the direction unit vector from the last to the current hit
+    const auto diff = (pCurrentHit->GetPositionVector() - pLastHit->GetPositionVector());
+    CartesianVector dir(0.f, 0.f, 1.f);
+    bool hasDir = false;
+    if (diff.GetMagnitudeSquared() > std::pow(std::numeric_limits<float>::epsilon(), 2))
+    {
+        hasDir = true;
+        dir = diff.GetUnitVector();
+    }
+    
+    // Find the neighbor hit with the minimum score
+    bool foundNeighbor = false;
+    float minScore = std::numeric_limits<float>::max();
+    for (const auto &entry : iter->second)
+    {
+        const auto pHit = entry.first;
+        const auto distanceSquared = entry.second;
+
+        if (std::find(remainingHits.begin(), remainingHits.end(), pHit) == remainingHits.end())
+            continue;
+
+        auto score = distanceSquared;
+        if (hasDir)
+        {
+            const auto d = pHit->GetPositionVector() - pCurrentHit->GetPositionVector();
+            const auto longitudinalDist = d.GetDotProduct(dir);
+            const auto transverseDist = d.GetMagnitudeSquared() - longitudinalDist * longitudinalDist;
+
+            score = m_transverseBias*transverseDist*transverseDist + longitudinalDist*longitudinalDist;
+        }
+
+        if (score > minScore)
+            continue;
+
+        foundNeighbor = true;
+        minScore = score;
+        pNextHit = pHit;
+    }
+
+    return foundNeighbor;
+}
+        
+// -----------------------------------------------------------------------------------------------------------------------------------------
+    
+void SecondaryInteractionsAlgorithm::StitchSegments(const std::vector<CaloHitList> &initialSegments, std::vector<CaloHitList> &stitchedSegments) const
+{
+    stitchedSegments = initialSegments;
+    bool stitchMade = true;
+    const auto thresholdSquared = m_stitchingThreshold * m_stitchingThreshold;
+
+    while (stitchMade)
+    {
+        stitchMade = false;
+        unsigned int stitchIndexI = std::numeric_limits<unsigned int>::max();
+        unsigned int stitchIndexJ = std::numeric_limits<unsigned int>::max();
+        bool stitchStartI = false;
+        bool stitchStartJ = false;
+        float minDistSquared = std::numeric_limits<float>::max();
+
+        // Loop over all possible pairs of segments
+        for (unsigned int i = 0; i < stitchedSegments.size(); ++i)
+        {
+            const auto segmentI = stitchedSegments.at(i);
+            const auto startI = segmentI.front()->GetPositionVector();
+            const auto endI = segmentI.back()->GetPositionVector();
+
+            for (unsigned int j = 0; j < i; ++j)
+            {
+                const auto segmentJ = stitchedSegments.at(j);
+                const auto startJ = segmentJ.front()->GetPositionVector();
+                const auto endJ = segmentJ.back()->GetPositionVector();
+
+                // Loop over all combinations of start & end points (SS, SE, ES, EE)
+                for (const auto &startEndI : {true, false})
+                {
+                    const auto pointI = startEndI ? startI : endI;
+                    for (const auto &startEndJ : {true, false})
+                    {
+                        const auto pointJ = startEndJ ? startJ : endJ;
+
+                        // Determine if the endpoint distance is below the threshold and the best yet
+                        const auto distSquared = pointI.GetDistanceSquared(pointJ);
+                        if (distSquared < thresholdSquared && distSquared < minDistSquared)
+                        {
+                            // Save this match for future reference
+                            stitchMade = true;
+                            minDistSquared = distSquared;
+                            stitchIndexI = i;
+                            stitchIndexJ = j;
+                            stitchStartI = startEndI;
+                            stitchStartJ = startEndJ;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Make the stitch
+        if (stitchMade)
+        {
+            auto &segmentI = stitchedSegments.at(stitchIndexI);
+            auto &segmentJ = stitchedSegments.at(stitchIndexJ);
+
+            // For SS or EE matches, we need to flip the second segment
+            const auto shouldFlipJ = (stitchStartI == stitchStartJ);
+            if (shouldFlipJ)
+                segmentJ.reverse();
+
+            // For SS or SE matches, we should add the second segment in front of the first - for ES or EE we should add it at the back
+            const auto shouldPutIFirst = !stitchStartI;
+            const auto insertPos = shouldPutIFirst ? segmentI.end() : segmentI.begin();
+
+            // Combine the second segment into the first
+            segmentI.insert(insertPos, segmentJ.begin(), segmentJ.end());
+
+            // Remove the second segment
+            stitchedSegments.erase(std::next(stitchedSegments.begin(), stitchIndexJ));
+        }
+    }
+}
+
+// -----------------------------------------------------------------------------------------------------------------------------------------
+
+void SecondaryInteractionsAlgorithm::BuildHitHierarchy(const pandora::Vertex *const pVertex, const std::vector<CaloHitList> &continuousSegments, CaloHitHierarchyMap &hitHierarchy, const CaloHit *&pSeedHit) const
+{
+    // Collect all of the hits into a single list
+    CaloHitList allHits;
+    for (const auto &segment : continuousSegments)
+        allHits.insert(allHits.end(), segment.begin(), segment.end());
+
+    if (allHits.empty())
+        return;
+    
+    // Build a separation map with no thresholding
+    HitSeparationMap separationMap;
+    this->GetHitSeparationMap(allHits, separationMap, std::numeric_limits<float>::max());
+
+    // Make the initial hierarchy map with the segment that is closest to the vertex and mark all others as orphans
+    std::vector<CaloHitList> orphanSegments;
+    pSeedHit = this->GetClosestHitToVertex(allHits, pVertex);
+    for (const auto &segment : continuousSegments)
+    {
+        // If the segment doesn't contain the seed hit call it an orphan
+        if (std::find(segment.begin(), segment.end(), pSeedHit) == segment.end())
+        {
+            orphanSegments.push_back(segment);
+        }
+        else
+        {
+            this->BuildInitialHitHierarchy(segment, pSeedHit, hitHierarchy);
+        }
+    }
+    
+    // Keep making the best possible match until there are no more orphans
+    while (!orphanSegments.empty())
+    {
+        this->MakeBestHierarchyLink(separationMap, orphanSegments, hitHierarchy);
+    }
+            
+    //this->PrintHitHierarchyMap(hitHierarchy, pSeedHit, 0);
+}
+
+// -----------------------------------------------------------------------------------------------------------------------------------------
+
+void SecondaryInteractionsAlgorithm::BuildInitialHitHierarchy(const CaloHitList &segment, const CaloHit *const pSeedHit, CaloHitHierarchyMap &hitHierarchy) const
+{
+    if (!hitHierarchy.empty())
+        throw StatusCodeException(STATUS_CODE_INVALID_PARAMETER);
+
+    if (segment.empty())
+        throw StatusCodeException(STATUS_CODE_INVALID_PARAMETER);
+
+    const auto seedHitIter = std::find(segment.begin(), segment.end(), pSeedHit);
+    if (seedHitIter == segment.end())
+        throw StatusCodeException(STATUS_CODE_NOT_FOUND);
+
+    // If the seed hit is the only one in the input list, then it has no daughters
+    if (segment.size() == 1)
+    {
+        hitHierarchy.emplace(*seedHitIter, std::vector<const CaloHit *>());
+        return;
+    }
+   
+    // Move forward through the list from the seed hit
+    auto hitIter = seedHitIter;
+    while (std::next(hitIter) != segment.end())
+    {
+        hitHierarchy[*hitIter].push_back(*std::next(hitIter));
+        std::advance(hitIter, 1);
+    }
+
+    // Move backward through the list from the seed hit
+    hitIter = seedHitIter;
+    while (hitIter != segment.begin())
+    {
+        hitHierarchy[*hitIter].push_back(*std::prev(hitIter));
+        std::advance(hitIter, -1);
+    }
+}
+
+// -----------------------------------------------------------------------------------------------------------------------------------------
+
+void SecondaryInteractionsAlgorithm::MakeBestHierarchyLink(const HitSeparationMap &separationMap, std::vector<CaloHitList> &orphanSegments, CaloHitHierarchyMap &hitHierarchy) const
+{
+    if (orphanSegments.empty())
+        return;
+
+    // Extract all of the hits from the hit hierarchy so far
+    CaloHitList allHitsInHierarchy;
+    for (const auto &entry : hitHierarchy)
+    {
+        // Parent hits
+        const auto pParentHit = entry.first;
+        if (std::find(allHitsInHierarchy.begin(), allHitsInHierarchy.end(), pParentHit) == allHitsInHierarchy.end())
+            allHitsInHierarchy.push_back(pParentHit);
+
+        // Daughter hits
+        for (const auto &pDaughterHit : entry.second)
+        {
+            if (std::find(allHitsInHierarchy.begin(), allHitsInHierarchy.end(), pDaughterHit) == allHitsInHierarchy.end())
+                allHitsInHierarchy.push_back(pDaughterHit);
+        }
+    }
+
+    if (allHitsInHierarchy.empty())
+        throw StatusCodeException(STATUS_CODE_INVALID_PARAMETER);
+
+    float minHitDistSquared = std::numeric_limits<float>::max();
+    unsigned int nearestSegmentIndex = 0;
+    const CaloHit *pNearestHit = nullptr;
+    bool matchFront = true;
+
+    for (unsigned int i = 0; i < orphanSegments.size(); i++)
+    {
+        const auto segment = orphanSegments.at(i);
+
+        // Check the first hit in the segment for a neighbor
+        const auto pFrontHit = segment.front();
+        const auto pFrontNextHit = *std::next(segment.begin(), segment.size() == 1 ? 0 : 1);
+
+        const CaloHit *pNearestFrontHit = nullptr;
+        if (!this->GetNearestNeighbor(separationMap, allHitsInHierarchy, pFrontNextHit, pFrontHit, pNearestFrontHit))
+            throw StatusCodeException(STATUS_CODE_NOT_FOUND);
+
+        const auto frontHitDistSquared = pFrontHit->GetPositionVector().GetDistanceSquared(pNearestFrontHit->GetPositionVector());
+
+        // Check the last hit in the segment for a neighbor
+        const auto pBackHit = segment.back();
+        const auto pBackPrevHit = *std::prev(segment.end(), segment.size() == 1 ? 1 : 2); // ATTN here we go back 1 or 2 since end() points to the position after the back hit
+
+        const CaloHit *pNearestBackHit = nullptr;
+        if (!this->GetNearestNeighbor(separationMap, allHitsInHierarchy, pBackPrevHit, pBackHit, pNearestBackHit))
+            throw StatusCodeException(STATUS_CODE_NOT_FOUND);
+        
+        const auto backHitDistSquared = pBackHit->GetPositionVector().GetDistanceSquared(pNearestBackHit->GetPositionVector());
+
+        // Get the closest of the two hits
+        const auto nearestHitDistSquared = std::min(frontHitDistSquared, backHitDistSquared);
+
+        // Check if this is the closest so far
+        if (nearestHitDistSquared < minHitDistSquared)
+        {
+            minHitDistSquared = nearestHitDistSquared;
+            nearestSegmentIndex = i;
+            matchFront = (frontHitDistSquared < backHitDistSquared);
+            pNearestHit = matchFront ? pNearestFrontHit : pNearestBackHit;
+        }
+    }
+
+    // Make the link
+    this->AddSegmentToHitHierarchy(nearestSegmentIndex, matchFront, pNearestHit, orphanSegments, hitHierarchy);
+}
+
+// -----------------------------------------------------------------------------------------------------------------------------------------
+
+void SecondaryInteractionsAlgorithm::AddSegmentToHitHierarchy(const unsigned int nearestSegmentIndex, const bool matchFront, const CaloHit *const pNearestHit, std::vector<CaloHitList> &orphanSegments, CaloHitHierarchyMap &hitHierarchy) const
+{
+    auto &nearestHitDaughters = hitHierarchy[pNearestHit];
+    const auto segment = orphanSegments.at(nearestSegmentIndex);
+
+    if (matchFront)
+    {
+        // Move forward through the list from the seed hit
+        nearestHitDaughters.push_back(segment.front());
+        auto hitIter = segment.begin();
+        while (std::next(hitIter) != segment.end())
+        {
+            hitHierarchy[*hitIter].push_back(*std::next(hitIter));
+            std::advance(hitIter, 1);
+        }
+    }
+    else
+    {
+        // Move backward through the list from the seed hit
+        nearestHitDaughters.push_back(segment.back());
+        auto hitIter = segment.end();
+        while (hitIter != segment.begin())
+        {
+            hitHierarchy[*hitIter].push_back(*std::prev(hitIter));
+            std::advance(hitIter, -1);
+        }
+    }
+
+    orphanSegments.erase(std::next(orphanSegments.begin(), nearestSegmentIndex));
+}
+
+// -----------------------------------------------------------------------------------------------------------------------------------------
+
+void SecondaryInteractionsAlgorithm::PrintHitHierarchyMap(const CaloHitHierarchyMap &hitHierarchy, const CaloHit *const pSeedHit, const unsigned int depth) const
+{
+    std::cout << std::string(depth * 4, ' ') << " - " << pSeedHit;
+
+    const auto iter = hitHierarchy.find(pSeedHit);
+    if (iter != hitHierarchy.end())
+    {
+        const auto daughters = iter->second;
+        const auto nDaughters = daughters.size();
+        std::cout << " (" << nDaughters << ") ";
+
+        if (nDaughters > 1)
+        {
+            std::cout << " -> ";
+            for (const auto pDaughterHit : daughters)
+                std::cout << pDaughterHit << "  ";
+        }
+        std::cout << std::endl;
+
+        for (const auto pDaughterHit : daughters)
+        {
+            this->PrintHitHierarchyMap(hitHierarchy, pDaughterHit, depth + ((nDaughters == 1) ? 0 : 1));
+        }
+    }
+    else
+    {
+        std::cout << " (X) " << std::endl << std::endl;
+    }
+}
+
+// -----------------------------------------------------------------------------------------------------------------------------------------
+
+void SecondaryInteractionsAlgorithm::GetDownstreamHits(const CaloHitHierarchyMap &hitHierarchy, const CaloHit *const pSeedHit, CaloHitList &downstreamHits) const
+{
+    downstreamHits.push_back(pSeedHit);
+
+    const auto iter = hitHierarchy.find(pSeedHit);
+    if (iter != hitHierarchy.end())
+    {
+        const auto daughters = iter->second;
+        for (const auto &pDaughterHit : daughters)
+        {
+            this->GetDownstreamHits(hitHierarchy, pDaughterHit, downstreamHits);
+        }
+    }
+}
+
+// -----------------------------------------------------------------------------------------------------------------------------------------
+
+void SecondaryInteractionsAlgorithm::GetSplitHits(const std::vector<CaloHitList> &continuousSegments, const HitSeparationMap &/*separationMap*/, CaloHitList &splitHits) const
+{
+    // Collect hits at possible split points: kinks, bifurcations
+    CaloHitList collectedHits;
+    //this->GetBifurcationHits(continuousSegments, separationMap, collectedHits); //// ATTN For now don't do bifurcation hits
+
+    for (const auto &segment : continuousSegments)
+        this->GetKinkHits(segment, collectedHits);
+
+    // Add the hits to the output provided they are unique
+    for (const auto &pHit : collectedHits)
+    {
+        if (std::find(splitHits.begin(), splitHits.end(), pHit) == splitHits.end())
+            splitHits.push_back(pHit);
+    }
+}
+
+// -----------------------------------------------------------------------------------------------------------------------------------------
+
+void SecondaryInteractionsAlgorithm::GetKinkHits(const CaloHitList &segment, CaloHitList &kinkHits) const
+{
+    if (segment.size() < 1 + 2 * m_nSampleHits)
+        return;
+
+    // Hits before the current hit
+    auto preBegin = segment.begin();
+    auto preEnd = std::next(preBegin, m_nSampleHits);
+    
+    // Current hit
+    auto thisHit = std::next(segment.begin(), m_nSampleHits);
+        
+    // Hits after the current hit
+    auto postBegin = std::next(preEnd, 1);
+    auto postEnd = std::next(postBegin, m_nSampleHits);
+
+    // Get the hit indices with a kink above the threshold angle
+    std::vector<std::pair<unsigned int, float> > hitIndexCosThetaVector;
+    for (unsigned int i = m_nSampleHits; i < segment.size() - m_nSampleHits; ++i)
+    {
+        // Get the hits from the iterators
+        const auto thisHitPos = (*thisHit)->GetPositionVector();
+        const CaloHitList preHits(preBegin, preEnd);
+        const CaloHitList postHits(postBegin, postEnd);
+
+        const auto cosTheta = this->GetKinkAngle(thisHitPos, preHits, postHits);
+
+        if (cosTheta < m_cosAngleThreshold)
+            hitIndexCosThetaVector.emplace_back(i, cosTheta);
+
+        preBegin++;
+        preEnd++;
+        postBegin++;
+        postEnd++;
+        thisHit++;
+    }
+
+    if (hitIndexCosThetaVector.empty())
+        return;
+
+    // When we have a bunch of consecutive indices passing the threshold, choose the index with the largest kink angles
+    std::vector<std::pair<unsigned int, float> > hitIndexCosThetaBunch = {hitIndexCosThetaVector.front()};
+    unsigned int lastIndex = hitIndexCosThetaBunch.front().first;
+    for (unsigned int i = 1; i < hitIndexCosThetaVector.size(); ++i)
+    {
+        const auto entry = hitIndexCosThetaVector.at(i);
+        const auto index = entry.first;
+
+        if (index != lastIndex + 1)
+        {
+            const auto kinkIndex = this->GetIndexWithMaxKinkAngle(hitIndexCosThetaBunch);
+            kinkHits.push_back(*(std::next(segment.begin(), kinkIndex)));
+            hitIndexCosThetaBunch.clear();
+        }
+
+        hitIndexCosThetaBunch.push_back(entry);
+        lastIndex = index;
+    }
+
+    const auto kinkIndex = this->GetIndexWithMaxKinkAngle(hitIndexCosThetaBunch);
+    kinkHits.push_back(*(std::next(segment.begin(), kinkIndex)));
+}
+
+// -----------------------------------------------------------------------------------------------------------------------------------------
+
+float SecondaryInteractionsAlgorithm::GetKinkAngle(const CartesianVector &thisHitPos, const CaloHitList &preHits, const CaloHitList &postHits) const
+{
+    CartesianVector preCentroid(0.f, 0.f, 0.f);
+    LArPcaHelper::EigenValues preEigenvalues(0.f, 0.f, 0.f);
+    LArPcaHelper::EigenVectors preEigenvectors;
+    LArPcaHelper::RunPca(preHits, preCentroid, preEigenvalues, preEigenvectors);
+    auto preDir = preEigenvectors.front();
+
+    CartesianVector postCentroid(0.f, 0.f, 0.f);
+    LArPcaHelper::EigenValues postEigenvalues(0.f, 0.f, 0.f);
+    LArPcaHelper::EigenVectors postEigenvectors;
+    LArPcaHelper::RunPca(postHits, postCentroid, postEigenvalues, postEigenvectors);
+    auto postDir = postEigenvectors.front();
+
+    // Flip the directions so they point along the direction of the "track"
+    preDir *= ((thisHitPos - preCentroid).GetUnitVector().GetDotProduct(preDir) > 0 ? 1 : -1);
+    postDir *= ((thisHitPos - postCentroid).GetUnitVector().GetDotProduct(postDir) > 0 ? -1 : 1);
+
+    return (preDir).GetCosOpeningAngle(postDir);
+}
+
+// -----------------------------------------------------------------------------------------------------------------------------------------
+    
+unsigned int SecondaryInteractionsAlgorithm::GetIndexWithMaxKinkAngle(const std::vector<std::pair<unsigned int, float> > &hitIndexCosThetaBunch) const
+{
+    if (hitIndexCosThetaBunch.empty())
+        throw StatusCodeException(STATUS_CODE_INVALID_PARAMETER);
+
+    unsigned int outputIndex = std::numeric_limits<unsigned int>::max();
+    float minCosTheta = std::numeric_limits<float>::max();
+
+    for (const auto &entry : hitIndexCosThetaBunch)
+    {
+        const auto index = entry.first;
+        const auto cosTheta = entry.second;
+
+        if (cosTheta > minCosTheta)
+            continue;
+
+        outputIndex = index;
+        minCosTheta = cosTheta;
+    }
+
+    return outputIndex;
+}
+
+// -----------------------------------------------------------------------------------------------------------------------------------------
+
+void SecondaryInteractionsAlgorithm::GetBifurcationHits(const std::vector<CaloHitList> &continuousSegments, const HitSeparationMap &separationMap, CaloHitList &bifurcationHits) const
+{
+    if (continuousSegments.size() < 2)
+        return;
+
+    for (unsigned int i = 0; i < continuousSegments.size(); ++i)
+    {
+        const auto segmentI = continuousSegments.at(i);
+
+        if (segmentI.empty())
+            continue;
+
+        // Collect all of the hits in the other segments (ignoring the first and last hits)
+        CaloHitList remainingHits;
+        for (unsigned int j = 0; j < continuousSegments.size(); ++j)
+        {
+            if (i == j)
+                continue;
+        
+            const auto segmentJ = continuousSegments.at(j);
+            if (segmentJ.size() <= 2)
+                continue;
+            
+            remainingHits.insert(remainingHits.end(), std::next(segmentJ.begin()), std::prev(segmentJ.end()));
+        }
+
+        // Check the first hit in the segment for a neighbor
+        const auto pFrontHit = segmentI.front();
+        const auto pFrontNextHit = *std::next(segmentI.begin(), segmentI.size() == 1 ? 0 : 1);
+        
+        const CaloHit *pBifurcationHitFront = nullptr;
+        if (this->GetNearestNeighbor(separationMap, remainingHits, pFrontNextHit, pFrontHit, pBifurcationHitFront))
+            bifurcationHits.push_back(pBifurcationHitFront);
+    
+        // Check the last hit in the segment for a neighbor
+        const auto pBackHit = segmentI.back();
+        const auto pBackPrevHit = *std::prev(segmentI.end(), segmentI.size() == 1 ? 1 : 2); // ATTN here we go back 1 or 2 since end() points to the position after the back hit
+        
+        const CaloHit *pBifurcationHitBack = nullptr;
+        if (this->GetNearestNeighbor(separationMap, remainingHits, pBackPrevHit, pBackHit, pBifurcationHitBack))
+            bifurcationHits.push_back(pBifurcationHitBack);
+    }
+}
+
+// -----------------------------------------------------------------------------------------------------------------------------------------
+            
+void SecondaryInteractionsAlgorithm::SelectSplitHits(const CaloHitList &candidateSplitHits, const CaloHitHierarchyMap &hitHierarchy, const CaloHit *const pSeedHit, CaloHitList &splitHits) const
+{
+    if (candidateSplitHits.empty())
+        return;
+
+    if (!pSeedHit)
+        return;
+
+    (void) hitHierarchy;
+    (void) splitHits;
+}
+
+// -----------------------------------------------------------------------------------------------------------------------------------------
+
+void SecondaryInteractionsAlgorithm::Get3DSplitPoints(const CaloHitList &allHits, const CaloHitList &splitHits, std::vector<SplitPoint3D> &splitPoints3D) const
+{
+    CaloHitList allHitsU, allHitsV, allHitsW;
+    this->OrganiseHitsByView(allHits, allHitsU, allHitsV, allHitsW);
+
+    CaloHitList splitHitsU, splitHitsV, splitHitsW;
+    this->OrganiseHitsByView(splitHits, splitHitsU, splitHitsV, splitHitsW);
+
+    /*
+    std::cout << "Getting 3D split points" << std::endl;
+    std::cout << " - nSplitHitsU : " << splitHitsU.size() << std::endl;
+    std::cout << " - nSplitHitsV : " << splitHitsV.size() << std::endl;
+    std::cout << " - nSplitHitsW : " << splitHitsW.size() << std::endl;
+    */
+    while (this->MakeThreeViewMatch(splitHitsU, splitHitsV, splitHitsW, splitPoints3D)) {}
+    //std::cout << "After 3-view matching found " << splitPoints3D.size() << " split points total" << std::endl;
+
+    while (this->MakeTwoViewMatch(allHitsU, allHitsV, allHitsW, splitHitsU, splitHitsV, splitHitsW, splitPoints3D)) {}
+    //std::cout << "After 2-view matching found " << splitPoints3D.size() << " split points total" << std::endl;
+}
+
+// -----------------------------------------------------------------------------------------------------------------------------------------
+
+void SecondaryInteractionsAlgorithm::OrganiseHitsByView(const CaloHitList &allHits, CaloHitList &hitsU, CaloHitList &hitsV, CaloHitList &hitsW) const
+{
+    for (const auto &pHit : allHits)
+    {
+        switch (pHit->GetHitType())
+        {
+            case TPC_VIEW_U:
+                hitsU.push_back(pHit);
+                break;
+            case TPC_VIEW_V:
+                hitsV.push_back(pHit);
+                break;
+            case TPC_VIEW_W:
+                hitsW.push_back(pHit);
+                break;
+            default:
+                throw StatusCodeException(STATUS_CODE_INVALID_PARAMETER);
+        }
+    }
+}
+
+// -----------------------------------------------------------------------------------------------------------------------------------------
+
+bool SecondaryInteractionsAlgorithm::MakeThreeViewMatch(CaloHitList &hitsU, CaloHitList &hitsV, CaloHitList &hitsW, std::vector<SplitPoint3D> &splitPoints3D) const
+{
+    if (hitsU.empty() || hitsV.empty() || hitsW.empty())
+        return false;
+
+    /*
+    std::cout << "Looking for 3-view matches for split hits" << std::endl;
+    std::cout << "  - NHitsU   : " << hitsU.size() << std::endl;
+    std::cout << "  - NHitsV   : " << hitsV.size() << std::endl;
+    std::cout << "  - NHitsW   : " << hitsW.size() << std::endl;
+    std::cout << "  - NMatches : " << splitPoints3D.size() << std::endl;
+    */
+
+    // Collect the viable split points
+    std::vector<SplitPoint3D> viableSplitPoints;
+    for (const auto &pHitU : hitsU)
+    {
+        for (const auto &pHitV : hitsV)
+        {
+            for (const auto &pHitW : hitsW)
+            {
+                const SplitPoint3D splitPoint(this->GetPandora(), pHitU, pHitV, pHitW);
+
+                /*
+                std::cout << "Considering triplet" << std::endl;
+                std::cout << "  - U    : " << pHitU << std::endl;
+                std::cout << "  - V    : " << pHitV << std::endl;
+                std::cout << "  - W    : " << pHitW << std::endl;
+                std::cout << "  - dX   : " << splitPoint.m_maxDeltaX << std::endl;
+                std::cout << "  - chi2 : " << splitPoint.m_chi2 << std::endl;
+                */
+
+                if (splitPoint.m_maxDeltaX > m_maxMatchDeltaX)
+                    continue;
+                
+                //std::cout << "  - Passes dX cut!" << std::endl;
+                
+                if (splitPoint.m_chi2 > m_maxMatch3ViewChi2)
+                    continue;
+                
+                //std::cout << "  - Passes chi2 cut!" << std::endl;
+
+                viableSplitPoints.push_back(splitPoint);
+            }
+        }
+    }
+                
+    //std::cout << "Found " << viableSplitPoints.size() << " viable triplets" << std::endl;
+
+    if (viableSplitPoints.empty())
+        return false;
+
+    // Get the best split point
+    unsigned int bestSplitPointIndex = 0;
+    float bestChi2 = std::numeric_limits<float>::max();
+    for (unsigned int i = 0; i < viableSplitPoints.size(); ++i)
+    {
+        const auto chi2 = viableSplitPoints.at(i).m_chi2;
+        if (chi2 < bestChi2)
+        {
+            bestChi2 = chi2;
+            bestSplitPointIndex = i;
+        }
+    }
+
+    // Make the match
+    const auto bestSplitPoint = viableSplitPoints.at(bestSplitPointIndex);
+    
+    /*
+    std::cout << "Best triplet is" << std::endl;
+    std::cout << "  - U : " << bestSplitPoint.GetHitWithView(TPC_VIEW_U) << std::endl;
+    std::cout << "  - V : " << bestSplitPoint.GetHitWithView(TPC_VIEW_V) << std::endl;
+    std::cout << "  - W : " << bestSplitPoint.GetHitWithView(TPC_VIEW_W) << std::endl;
+    */
+
+    splitPoints3D.push_back(bestSplitPoint);
+    hitsU.remove(bestSplitPoint.GetHitWithView(TPC_VIEW_U));
+    hitsV.remove(bestSplitPoint.GetHitWithView(TPC_VIEW_V));
+    hitsW.remove(bestSplitPoint.GetHitWithView(TPC_VIEW_W));
+
+    return true;
+}
+
+// -----------------------------------------------------------------------------------------------------------------------------------------
+
+bool SecondaryInteractionsAlgorithm::MakeTwoViewMatch(const CaloHitList &allHitsU, const CaloHitList &allHitsV, const CaloHitList &allHitsW, CaloHitList &hitsU, CaloHitList &hitsV, CaloHitList &hitsW, std::vector<SplitPoint3D> &splitPoints3D) const
+{
+    const auto nViewsEmpty = (hitsU.empty() ? 1 : 0) + (hitsV.empty() ? 1 : 0) + (hitsW.empty() ? 1 : 0);
+    if (nViewsEmpty > 1)
+        return false;
+
+    std::vector<SplitPoint3D> viableSplitPoints;
+    this->GetViableTwoViewMatches(hitsU, hitsV, allHitsW, viableSplitPoints);
+    this->GetViableTwoViewMatches(hitsU, hitsW, allHitsV, viableSplitPoints);
+    this->GetViableTwoViewMatches(hitsV, hitsW, allHitsU, viableSplitPoints);
+    
+    //std::cout << "Found " << viableSplitPoints.size() << " viable doublets" << std::endl;
+
+    if (viableSplitPoints.empty())
+        return false;
+
+    // Get the best split point
+    unsigned int bestSplitPointIndex = 0;
+    float bestChi2 = std::numeric_limits<float>::max();
+    for (unsigned int i = 0; i < viableSplitPoints.size(); ++i)
+    {
+        const auto chi2 = viableSplitPoints.at(i).m_chi2;
+        if (chi2 < bestChi2)
+        {
+            bestChi2 = chi2;
+            bestSplitPointIndex = i;
+        }
+    }
+
+    // Make the match
+    const auto bestSplitPoint = viableSplitPoints.at(bestSplitPointIndex);
+    
+    /*
+    std::cout << "Best doublet is" << std::endl;
+    std::cout << "  - A : " << bestSplitPoint.m_pHitA << std::endl;
+    std::cout << "  - B : " << bestSplitPoint.m_pHitB << std::endl;
+    */
+
+    splitPoints3D.push_back(bestSplitPoint);
+
+    const auto hitTypeA = bestSplitPoint.m_pHitA->GetHitType();
+    const auto hitTypeB = bestSplitPoint.m_pHitB->GetHitType();
+
+    if (hitTypeA == TPC_VIEW_U || hitTypeB == TPC_VIEW_U)
+        hitsU.remove(bestSplitPoint.GetHitWithView(TPC_VIEW_U));
+    
+    if (hitTypeA == TPC_VIEW_V || hitTypeB == TPC_VIEW_V)
+        hitsV.remove(bestSplitPoint.GetHitWithView(TPC_VIEW_V));
+    
+    if (hitTypeA == TPC_VIEW_W || hitTypeB == TPC_VIEW_W)
+        hitsW.remove(bestSplitPoint.GetHitWithView(TPC_VIEW_W));
+
+    return true;
+}
+
+// -----------------------------------------------------------------------------------------------------------------------------------------
+
+void SecondaryInteractionsAlgorithm::GetViableTwoViewMatches(const CaloHitList &hitsA, const CaloHitList &hitsB, const CaloHitList &hitsC, std::vector<SplitPoint3D> &splitPointsAB) const
+{
+    for (const auto &pHitA : hitsA)
+    {
+        for (const auto &pHitB : hitsB)
+        {
+            // Get the remaining hit type
+            const auto hitTypeA = pHitA->GetHitType();
+            const auto hitTypeB = pHitB->GetHitType();
+            HitType hitTypeC = HIT_CUSTOM;
+
+            if ((hitTypeA == TPC_VIEW_U && hitTypeB == TPC_VIEW_V) || (hitTypeA == TPC_VIEW_V && hitTypeB == TPC_VIEW_U))
+            {
+                hitTypeC = TPC_VIEW_W;
+            }
+            else if ((hitTypeA == TPC_VIEW_U && hitTypeB == TPC_VIEW_W) || (hitTypeA == TPC_VIEW_W && hitTypeB == TPC_VIEW_U))
+            {
+                hitTypeC = TPC_VIEW_V;
+            }
+            else if ((hitTypeA == TPC_VIEW_V && hitTypeB == TPC_VIEW_W) || (hitTypeA == TPC_VIEW_W && hitTypeB == TPC_VIEW_V))
+            {
+                hitTypeC = TPC_VIEW_U;
+            }
+            else
+            {
+                throw StatusCodeException(STATUS_CODE_INVALID_PARAMETER);
+            }
+
+            const SplitPoint3D splitPoint(this->GetPandora(), pHitA, pHitB);
+            
+            /*
+            std::cout << "Considering doublet" << std::endl;
+            std::cout << "  - A    : " << pHitA << " - " << hitTypeA << std::endl;
+            std::cout << "  - B    : " << pHitB << " - " << hitTypeB << std::endl;
+            std::cout << "  - dX   : " << splitPoint.m_maxDeltaX << std::endl;
+            std::cout << "  - chi2 : " << splitPoint.m_chi2 << std::endl;
+            */
+
+            if (splitPoint.m_maxDeltaX > m_maxMatchDeltaX)
+                continue;
+
+            //std::cout << "  - Passes dX cut!" << std::endl;
+
+            // Get the 3D position as projected into the remaining view
+            const auto projectedPosition = LArGeometryHelper::ProjectPosition(this->GetPandora(), splitPoint.m_position3D, hitTypeC);
+            const auto isInGap = LArGeometryHelper::IsInGap(this->GetPandora(), projectedPosition, hitTypeC, m_twoViewProjectionThreshold);
+
+            //if (isInGap) std::cout << "  - Projects to gap!" << std::endl;
+
+            bool projectsToHit = false;
+            if (!hitsC.empty())
+            {
+                const auto pNearestHit = this->GetClosestHitToPoint(hitsC, projectedPosition);
+                const auto nearestHitDistSquared = projectedPosition.GetDistanceSquared(pNearestHit->GetPositionVector());
+                //std::cout << "  - Nearest hit distance (squared) : " << nearestHitDistSquared << std::endl;
+                projectsToHit = (nearestHitDistSquared < m_twoViewProjectionThreshold * m_twoViewProjectionThreshold);
+            }
+            else
+            {
+                //std::cout << "  - No hits in remaining view!" << std::endl;
+            }
+
+            //if (projectsToHit) std::cout << "  - Projects to hit! (not using)" << std::endl;
+
+            if (!isInGap && !projectsToHit)
+                continue;
+                
+            splitPointsAB.push_back(splitPoint);
+        }
+    }
+}
+
+// -----------------------------------------------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------------------------------------------------------------------
+
+SecondaryInteractionsAlgorithm::SplitPoint3D::SplitPoint3D(const Pandora &pandora, const CaloHit *const pHitA, const CaloHit *const pHitB, const CaloHit *const pHitC) :
+    m_pHitA(pHitA),
+    m_pHitB(pHitB),
+    m_pHitC(pHitC),
+    m_hasHitC(true),
+    m_position3D(-std::numeric_limits<float>::max(), -std::numeric_limits<float>::max(), -std::numeric_limits<float>::max()),
+    m_chi2(-std::numeric_limits<float>::max()),
+    m_maxDeltaX(-std::numeric_limits<float>::max())
+{
+    this->CheckValidHitTypes();
+    this->SetMaxDeltaX();
+    
+    LArGeometryHelper::MergeThreePositions3D(pandora, m_pHitA->GetHitType(), m_pHitB->GetHitType(), m_pHitC->GetHitType(), m_pHitA->GetPositionVector(), m_pHitB->GetPositionVector(), m_pHitC->GetPositionVector(), m_position3D, m_chi2);
+}
+
+// -----------------------------------------------------------------------------------------------------------------------------------------
+
+SecondaryInteractionsAlgorithm::SplitPoint3D::SplitPoint3D(const Pandora &pandora, const CaloHit *const pHitA, const CaloHit *const pHitB) :
+    m_pHitA(pHitA),
+    m_pHitB(pHitB),
+    m_pHitC(nullptr),
+    m_hasHitC(false),
+    m_position3D(-std::numeric_limits<float>::max(), -std::numeric_limits<float>::max(), -std::numeric_limits<float>::max()),
+    m_chi2(-std::numeric_limits<float>::max()),
+    m_maxDeltaX(-std::numeric_limits<float>::max())
+{
+    this->CheckValidHitTypes();
+    this->SetMaxDeltaX();
+    
+    LArGeometryHelper::MergeTwoPositions3D(pandora, m_pHitA->GetHitType(), m_pHitB->GetHitType(), m_pHitA->GetPositionVector(), m_pHitB->GetPositionVector(), m_position3D, m_chi2);
+}
+
+// -----------------------------------------------------------------------------------------------------------------------------------------
+
+void SecondaryInteractionsAlgorithm::SplitPoint3D::CheckValidHitTypes() const
+{
+    const auto hitTypeA = m_pHitA->GetHitType();
+    const auto hitTypeB = m_pHitB->GetHitType();
+    const auto hitTypeC = m_hasHitC ? m_pHitC->GetHitType() : HIT_CUSTOM;
+
+    if (hitTypeA == hitTypeB || hitTypeA == hitTypeC || hitTypeB == hitTypeC)
+        throw StatusCodeException(STATUS_CODE_INVALID_PARAMETER);
+
+    if (hitTypeA != TPC_VIEW_U && hitTypeA != TPC_VIEW_V && hitTypeA != TPC_VIEW_W)
+        throw StatusCodeException(STATUS_CODE_INVALID_PARAMETER);
+    
+    if (hitTypeB != TPC_VIEW_U && hitTypeB != TPC_VIEW_V && hitTypeB != TPC_VIEW_W)
+        throw StatusCodeException(STATUS_CODE_INVALID_PARAMETER);
+    
+    if (m_hasHitC && hitTypeC != TPC_VIEW_U && hitTypeC != TPC_VIEW_V && hitTypeC != TPC_VIEW_W)
+        throw StatusCodeException(STATUS_CODE_INVALID_PARAMETER);
+}
+
+// -----------------------------------------------------------------------------------------------------------------------------------------
+
+void SecondaryInteractionsAlgorithm::SplitPoint3D::SetMaxDeltaX()
+{
+    const auto hitPosA = m_pHitA->GetPositionVector();
+    const auto hitPosB = m_pHitB->GetPositionVector();
+    
+    const auto deltaXAB = std::abs((hitPosA - hitPosB).GetX());
+    m_maxDeltaX = deltaXAB;
+
+    if (m_hasHitC)
+    {
+        const auto hitPosC = m_pHitC->GetPositionVector();
+    
+        const auto deltaXAC = std::abs((hitPosA - hitPosC).GetX());
+        const auto deltaXBC = std::abs((hitPosB - hitPosC).GetX());
+
+        m_maxDeltaX = std::max(std::max(deltaXAC, deltaXBC), deltaXAB);
+    }
+}
+
+// -----------------------------------------------------------------------------------------------------------------------------------------
+
+const CaloHit *SecondaryInteractionsAlgorithm::SplitPoint3D::GetHitWithView(const HitType &view) const
+{
+    if (m_pHitA->GetHitType() == view)
+        return m_pHitA;
+    
+    if (m_pHitB->GetHitType() == view)
+        return m_pHitB;
+    
+    if (m_hasHitC)
+    {
+        if (m_pHitC->GetHitType() == view)
+            return m_pHitC;
+    }
+
+    throw StatusCodeException(STATUS_CODE_NOT_FOUND);
+}
+
+// -----------------------------------------------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------------------------------------------------------------------
+
+StatusCode SecondaryInteractionsAlgorithm::ReadSettings(const TiXmlHandle xmlHandle)
+{
+    //PANDORA_RETURN_RESULT_IF(STATUS_CODE_SUCCESS, !=, XmlHelper::ReadVectorOfValues(xmlHandle, "ClusterListNames", m_clusterListNames));
+
+    PANDORA_RETURN_RESULT_IF(STATUS_CODE_SUCCESS, !=, XmlHelper::ReadVectorOfValues(xmlHandle, "PfoListNames", m_pfoListNames));
+    PANDORA_RETURN_RESULT_IF(STATUS_CODE_SUCCESS, !=, XmlHelper::ReadValue(xmlHandle, "VertexListName", m_vertexListName));
+
+    PANDORA_RETURN_RESULT_IF_AND_IF(STATUS_CODE_NOT_FOUND, STATUS_CODE_SUCCESS, !=, XmlHelper::ReadValue(xmlHandle, "IsolatedHitDistance", m_isolatedHitDistance));
+    PANDORA_RETURN_RESULT_IF_AND_IF(STATUS_CODE_NOT_FOUND, STATUS_CODE_SUCCESS, !=, XmlHelper::ReadValue(xmlHandle, "StitchingThresholdDistance", m_stitchingThreshold));
+    PANDORA_RETURN_RESULT_IF_AND_IF(STATUS_CODE_NOT_FOUND, STATUS_CODE_SUCCESS, !=, XmlHelper::ReadValue(xmlHandle, "TransverseBias", m_transverseBias));
+    PANDORA_RETURN_RESULT_IF_AND_IF(STATUS_CODE_NOT_FOUND, STATUS_CODE_SUCCESS, !=, XmlHelper::ReadValue(xmlHandle, "NumberOfSampleHits", m_nSampleHits));
+    PANDORA_RETURN_RESULT_IF_AND_IF(STATUS_CODE_NOT_FOUND, STATUS_CODE_SUCCESS, !=, XmlHelper::ReadValue(xmlHandle, "CosAngleThreshold", m_cosAngleThreshold));
+    PANDORA_RETURN_RESULT_IF_AND_IF(STATUS_CODE_NOT_FOUND, STATUS_CODE_SUCCESS, !=, XmlHelper::ReadValue(xmlHandle, "MaxMatchDeltaX", m_maxMatchDeltaX));
+    PANDORA_RETURN_RESULT_IF_AND_IF(STATUS_CODE_NOT_FOUND, STATUS_CODE_SUCCESS, !=, XmlHelper::ReadValue(xmlHandle, "MaxMatchThreeViewChi2", m_maxMatch3ViewChi2));
+    PANDORA_RETURN_RESULT_IF_AND_IF(STATUS_CODE_NOT_FOUND, STATUS_CODE_SUCCESS, !=, XmlHelper::ReadValue(xmlHandle, "TwoViewProjectionThreshold", m_twoViewProjectionThreshold));
+
+    return STATUS_CODE_SUCCESS;
+}
+
+} // namespace lar_content
