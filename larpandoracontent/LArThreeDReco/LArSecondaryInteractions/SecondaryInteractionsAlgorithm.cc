@@ -123,188 +123,8 @@ void SecondaryInteractionsAlgorithm::SplitPfo(const ParticleFlowObject *const pP
     ClusterList upstreamClusters, downstreamClusters;
     this->SplitPfoClusters(pPfo, viewToUpstreamHitsMap, viewToDownstreamHitsMap, upstreamClusters, downstreamClusters);
     this->SplitPfo(pPfo, upstreamClusters, downstreamClusters, pfosToSave, pfosToDelete); 
+    std::cout << "Split made!" << std::endl;
 }
-
-// -----------------------------------------------------------------------------------------------------------------------------------------
-
-        /*
-        // Get the parameters of the current PFO
-        PandoraContentApi::ParticleFlowObject::Parameters pfoParameters;
-        pfoParameters.m_particleId = pPfo->GetParticleId();
-        pfoParameters.m_charge = pPfo->GetCharge();
-        pfoParameters.m_mass = pPfo->GetMass();
-        pfoParameters.m_energy = pPfo->GetEnergy();
-        pfoParameters.m_momentum = pPfo->GetMomentum();
-        pfoParameters.m_propertiesToAdd = pPfo->GetPropertiesMap();
-        pfoParameters.m_clusterList.clear();
-        pfoParameters.m_trackList.clear();
-        pfoParameters.m_vertexList.clear();
-
-        //// BEGIN TEST
-        if (!splitPoints3D.empty())
-        {
-            std::cout << "Choosing the split point of " << splitPoints3D.size() << " candidates" << std::endl;
-
-            auto splitPointIter = splitPoints3D.begin();
-            auto bestSplitPointIter = splitPoints3D.begin();
-            float minDistSquared = std::numeric_limits<float>::max();
-
-            while (splitPointIter != splitPoints3D.end())
-            {
-                const auto distSquared = splitPointIter->m_position3D.GetDistanceSquared(pVertex->GetPosition());
-                if (distSquared < minDistSquared)
-                {
-                    bestSplitPointIter = splitPointIter;
-                    minDistSquared = distSquared;
-                }
-
-                std::advance(splitPointIter, 1);
-            }
-            const auto splitPoint3D = *bestSplitPointIter;
-        
-            ViewToHitsMap newClusterHitsA, newClusterHitsB;
-
-            for (const auto &view : {TPC_VIEW_U, TPC_VIEW_V, TPC_VIEW_W})
-            {
-                CaloHitList hitsInView;
-                LArPfoHelper::GetCaloHits(pPfo, view, hitsInView);
-
-                if (hitsInView.empty())
-                    continue;
-
-                // Get the split hit if possible
-                bool hasSplitHit = true;
-                const pandora::CaloHit *pSplitHit = nullptr;
-                try
-                {
-                    pSplitHit = splitPoint3D.GetHitWithView(view);
-                }
-                catch (const StatusCodeException &) { hasSplitHit = false; }
-
-                if (!hasSplitHit)
-                {
-                    // If the split position projects to a gap, then just find the closest hit 
-                    const auto projectedPosition = LArGeometryHelper::ProjectPosition(this->GetPandora(), splitPoint3D.m_position3D, view);
-                    pSplitHit = this->GetClosestHitToPoint(hitsInView, projectedPosition);
-                }
-
-                // Now make the split using the hierarchy
-                const auto &hitHierarchy = hitHierarchies.at(view);
-                auto &downstreamHits = newClusterHitsB[view];
-                auto &upstreamHits = newClusterHitsA[view];
-
-                this->GetDownstreamHits(hitHierarchy, pSplitHit, downstreamHits);
-                for (const auto &pCaloHit : hitsInView)
-                {
-                    if (std::find(downstreamHits.begin(), downstreamHits.end(), pCaloHit) == downstreamHits.end())
-                        upstreamHits.push_back(pCaloHit);
-                }
-            }
-    
-            // Make new pfos for before and after the split
-            const ParticleFlowObject *pOutputPfoA(NULL);
-            const ParticleFlowObject *pOutputPfoB(NULL);
-            PANDORA_THROW_RESULT_IF(STATUS_CODE_SUCCESS, !=, PandoraContentApi::ParticleFlowObject::Create(*this, pfoParameters, pOutputPfoA));
-            PANDORA_THROW_RESULT_IF(STATUS_CODE_SUCCESS, !=, PandoraContentApi::ParticleFlowObject::Create(*this, pfoParameters, pOutputPfoB));
-            pfosToSave.push_back(pOutputPfoA);
-            pfosToSave.push_back(pOutputPfoB);
-
-            // Make the parent daughter link
-            PANDORA_THROW_RESULT_IF(STATUS_CODE_SUCCESS, !=, PandoraContentApi::SetPfoParentDaughterRelationship(*this, pOutputPfoA, pOutputPfoB));
-
-            // Make new clusters before and after the split
-            ClusterList newClustersA, newClustersB;
-            for (const auto &view : {TPC_VIEW_U, TPC_VIEW_V, TPC_VIEW_W})
-            {
-                ClusterList clusters;
-                LArPfoHelper::GetClusters(pPfo, view, clusters);
-           
-                if (clusters.empty())
-                    continue;
-
-                const std::string clusterListName = (view == TPC_VIEW_U ? "ClustersU" : (view == TPC_VIEW_V ? "ClustersV" : "ClustersW"));
-                std::cout << "Switching the cluster list to " << clusterListName << std::endl;
-                const StatusCode listChangeStatusCode(PandoraContentApi::ReplaceCurrentList<Cluster>(*this, clusterListName));
-                if (listChangeStatusCode == STATUS_CODE_NOT_FOUND)
-                    continue;
-
-                if (listChangeStatusCode != STATUS_CODE_SUCCESS)
-                    throw StatusCodeException(listChangeStatusCode);
-
-                std::cout << "I did the switcheroo" << std::endl;
-                
-                for (const auto &pCluster : clusters)
-                {
-                    std::cout << "Schlonging out that clusterooni from the PFO" << std::endl;
-                    PANDORA_RETURN_RESULT_IF(STATUS_CODE_SUCCESS, !=, PandoraContentApi::RemoveFromPfo(*this, pPfo, pCluster));
-                }
-
-                std::cout << "Gonna start the thing.. there are: " << clusters.size() << " clusters in view " << view << std::endl;
-                
-                std::string clusterListToSaveName, clusterListToDeleteName;
-                PANDORA_RETURN_RESULT_IF(STATUS_CODE_SUCCESS, !=, PandoraContentApi::InitializeFragmentation(*this, clusters, clusterListToDeleteName, clusterListToSaveName));
-
-                std::cout << "Okay I started doing the thing." << std::endl;
-
-                PandoraContentApi::Cluster::Parameters clusterParametersA, clusterParametersB;
-                clusterParametersA.m_caloHitList = newClusterHitsA.at(view);
-                clusterParametersB.m_caloHitList = newClusterHitsB.at(view);
-
-                if (!clusterParametersA.m_caloHitList.empty())
-                {
-                    const Cluster *pNewClusterA(nullptr);
-                    PANDORA_THROW_RESULT_IF(STATUS_CODE_SUCCESS, !=, PandoraContentApi::Cluster::Create(*this, clusterParametersA, pNewClusterA));
-                    newClustersA.push_back(pNewClusterA);
-                }
-
-                if (!clusterParametersB.m_caloHitList.empty())
-                {
-                    const Cluster *pNewClusterB(nullptr);
-                    PANDORA_THROW_RESULT_IF(STATUS_CODE_SUCCESS, !=, PandoraContentApi::Cluster::Create(*this, clusterParametersB, pNewClusterB));
-                    newClustersB.push_back(pNewClusterB);
-                }
-                
-                std::cout << "Made some new things..." << std::endl;
-            
-                PANDORA_RETURN_RESULT_IF(STATUS_CODE_SUCCESS, !=, PandoraContentApi::EndFragmentation(*this, clusterListToSaveName, clusterListToDeleteName));
-
-                std::cout << "Boom. Did the thing." << std::endl;
-            }
-                    
-        
-            std::cout << "Adding dem clusters to the new pfos" << std::endl;
-
-            // Add the new clusters to the PFO
-            for (const auto &pCluster : newClustersA)
-                PANDORA_THROW_RESULT_IF(STATUS_CODE_SUCCESS, !=, PandoraContentApi::AddToPfo(*this, pOutputPfoA, pCluster));
-            
-            for (const auto &pCluster : newClustersB)
-                PANDORA_THROW_RESULT_IF(STATUS_CODE_SUCCESS, !=, PandoraContentApi::AddToPfo(*this, pOutputPfoB, pCluster));
-        
-            std::cout << "Boom. Done it." << std::endl;
-
-            pfosToDelete.push_back(pPfo);
-        }
-        //// END TEST
-        */
-    /*
-    std::cout << "nPfos to save: " << pfosToSave.size() << std::endl;
-    std::cout << "nPfos to delete: " << pfosToDelete.size() << std::endl;
-
-    if (!pfosToSave.empty())
-    {
-        PANDORA_RETURN_RESULT_IF(STATUS_CODE_SUCCESS, !=, PandoraContentApi::SaveList(*this, m_pfoListName, pfosToSave));
-    }
-   
-    if (!pfosToDelete.empty())
-    {
-        PANDORA_RETURN_RESULT_IF(STATUS_CODE_SUCCESS, !=, PandoraContentApi::ReplaceCurrentList<Pfo>(*this, m_pfoListName));
-        for (const auto &pPfo : pfosToDelete)
-        {
-            PANDORA_RETURN_RESULT_IF(STATUS_CODE_SUCCESS, !=, PandoraContentApi::Delete(*this, pPfo));
-        }
-    }
-    */
 
 // -----------------------------------------------------------------------------------------------------------------------------------------
 
@@ -826,7 +646,7 @@ void SecondaryInteractionsAlgorithm::GetSplitHits(const std::vector<CaloHitList>
 {
     // Collect hits at possible split points: kinks, bifurcations
     CaloHitList collectedHits;
-    this->GetBifurcationHits(continuousSegments, separationMap, collectedHits); //// ATTN For now don't do bifurcation hits
+    this->GetBifurcationHits(continuousSegments, separationMap, collectedHits);
 
     for (const auto &segment : continuousSegments)
         this->GetKinkHits(segment, collectedHits);
@@ -1057,9 +877,11 @@ float SecondaryInteractionsAlgorithm::GetSplitPointScore(const SplitPoint3D &spl
 
         if (nHitsTotal == 0)
             continue;
-
+    
         // Give more upstream splits a larger score
-        score += static_cast<float>(nDownstreamHits) / static_cast<float>(nHitsTotal);
+        const auto upstreamScore = static_cast<float>(nDownstreamHits) / static_cast<float>(nHitsTotal);
+
+        score += upstreamScore;
         nViewsUsed++;
     }
 
@@ -1293,6 +1115,14 @@ void SecondaryInteractionsAlgorithm::GetViableTwoViewMatches(const CaloHitList &
 
 void SecondaryInteractionsAlgorithm::SplitHitListAtPoint(const HitType view, const CaloHitList &caloHits, const CaloHitHierarchyMap &hitHierarchyMap, const SplitPoint3D &chosenSplitPoint, CaloHitList &upstreamHits, CaloHitList &downstreamHits) const
 {
+    // In the case of only one hit, just call it upstream
+    if (caloHits.size() <= 1)
+    {
+        upstreamHits = caloHits;
+        downstreamHits.clear();
+        return;
+    }
+
     // Get the split hit if possible
     bool hasSplitHit = true;
     const pandora::CaloHit *pSplitHit = nullptr;
@@ -1436,7 +1266,10 @@ void SecondaryInteractionsAlgorithm::SplitPfoClusters(const ParticleFlowObject *
 
 void SecondaryInteractionsAlgorithm::SplitPfo(const ParticleFlowObject *const pPfo, const ClusterList &upstreamClusters, const ClusterList &downstreamClusters, PfoList &pfosToSave, PfoList &pfosToDelete) const
 {
-    // TODO Parent-daughter link
+    std::cout << "Input PFO" << std::endl;
+    std::cout << " - nParents   : " << pPfo->GetParentPfoList().size() << std::endl;
+    std::cout << " - nDaughters : " << pPfo->GetDaughterPfoList().size() << std::endl;
+
     PandoraContentApi::ParticleFlowObject::Parameters pfoParameters;
     pfoParameters.m_particleId = pPfo->GetParticleId();
     pfoParameters.m_charge = pPfo->GetCharge();
@@ -1468,6 +1301,9 @@ void SecondaryInteractionsAlgorithm::SplitPfo(const ParticleFlowObject *const pP
 
     // Mark the original PFO for deletion
     pfosToDelete.push_back(pPfo);
+            
+    // Make the parent daughter link
+    PANDORA_THROW_RESULT_IF(STATUS_CODE_SUCCESS, !=, PandoraContentApi::SetPfoParentDaughterRelationship(*this, pUpstreamPfo, pDownstreamPfo));
 }
 
 // -----------------------------------------------------------------------------------------------------------------------------------------

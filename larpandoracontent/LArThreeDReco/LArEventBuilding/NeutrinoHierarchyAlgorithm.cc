@@ -195,10 +195,26 @@ void NeutrinoHierarchyAlgorithm::ProcessPfoInfoMap(const ParticleFlowObject *con
         const PfoInfo *const pPfoInfo(pfoInfoMap.at(pPfo));
 
         PfoVector daughterPfos(pPfoInfo->GetDaughterPfoList().begin(), pPfoInfo->GetDaughterPfoList().end());
+            
+        //// BEGIN TEST
+        // Add the existing daughter PFOs to the vector
+        const auto existingDaughters = pPfo->GetDaughterPfoList();
+        for (const auto &pDaughterPfo : existingDaughters)
+        {
+            // Remove the relationship (to be added back later in sorted order)
+            PANDORA_THROW_RESULT_IF(STATUS_CODE_SUCCESS, !=, PandoraContentApi::RemovePfoParentDaughterRelationship(*this, pPfoInfo->GetThisPfo(), pDaughterPfo));
+
+            if (std::find(daughterPfos.begin(), daughterPfos.end(), pDaughterPfo) == daughterPfos.end())
+                daughterPfos.push_back(pDaughterPfo);
+        }
+        //// END TEST
+        
         std::sort(daughterPfos.begin(), daughterPfos.end(), LArPfoHelper::SortByNHits);
 
         for (const ParticleFlowObject *const pDaughterPfo : daughterPfos)
+        {
             PANDORA_THROW_RESULT_IF(STATUS_CODE_SUCCESS, !=, PandoraContentApi::SetPfoParentDaughterRelationship(*this, pPfoInfo->GetThisPfo(), pDaughterPfo));
+        }
     }
 
     // Deal with any remaining parent-less pfos
@@ -275,8 +291,20 @@ NeutrinoHierarchyAlgorithm::PfoInfo::PfoInfo(const pandora::ParticleFlowObject *
     m_pSlidingFitResult3D(nullptr),
     m_isNeutrinoVertexAssociated(false),
     m_isInnerLayerAssociated(false),
-    m_pParentPfo(nullptr)
+    m_pParentPfo(nullptr),
+    m_daughterPfoList(pPfo->GetDaughterPfoList()) //// TEST
 {
+    //// BEGIN TEST
+    const auto parentList = pPfo->GetParentPfoList();
+    if (!parentList.empty())
+    {
+        if (parentList.size() != 1)
+            throw StatusCodeException(STATUS_CODE_OUT_OF_RANGE);
+
+        m_pParentPfo = parentList.front();
+    }
+    //// END TEST
+
     ClusterList clusterList3D;
     LArPfoHelper::GetThreeDClusterList(pPfo, clusterList3D);
 

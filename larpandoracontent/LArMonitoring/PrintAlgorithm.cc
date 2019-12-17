@@ -19,6 +19,7 @@ namespace lar_content
 StatusCode PrintAlgorithm::Run()
 {
     LArFormattingHelper::PrintHeader(m_message);
+
     return STATUS_CODE_SUCCESS;
 }
 
