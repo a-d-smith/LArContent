@@ -66,6 +66,9 @@ void BranchAssociatedPfosTool::Run(NeutrinoHierarchyAlgorithm *const pAlgorithm,
 
             for (const ParticleFlowObject *const pPfo : unassignedPfos)
             {
+                if (pAlgorithm->IsLinkCyclical(pfoInfoMap, pParentPfo, pPfo))
+                    continue;
+
                 if (recentlyAssigned.count(pPfo))
                     continue;
 

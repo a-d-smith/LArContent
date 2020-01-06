@@ -101,8 +101,9 @@ private:
      *  @brief  Collect the pfos from the input pfo list
      *
      *  @param  inputPfos the vector of input pfos to populate
+     *  @param  pfoListName the name of the pfo list to collect
      */
-    void CollectInputPfos(pandora::PfoList &inputPfos) const;
+    void CollectInputPfos(pandora::PfoList &inputPfos, const std::string &pfoListName) const;
 
     /**
      *  @brief  Split the input PFO if a viable split point can be found
@@ -225,21 +226,23 @@ private:
     void SplitPfoHits(const ViewToHitsMap &viewToCaloHitsMap, const ViewToHitHierarchyMap &viewToHitHierarchyMap, const SplitPoint3D &chosenSplitPoint, ViewToHitsMap &viewToUpstreamHitsMap, ViewToHitsMap &viewToDownstreamHitsMap) const;
     void SplitPfoClusters(const pandora::ParticleFlowObject *const pPfo, const ViewToHitsMap &viewToUpstreamHitsMap, const ViewToHitsMap &viewToDownstreamHitsMap, pandora::ClusterList &upstreamClusters, pandora::ClusterList &downstreamClusters) const;
     void SplitPfo(const pandora::ParticleFlowObject *const pPfo, const pandora::ClusterList &upstreamClusters, const pandora::ClusterList &downstreamClusters, pandora::PfoList &pfosToSave, pandora::PfoList &pfosToDelete) const;
+    float GetDimension(const pandora::CaloHitList &hits) const;
+    unsigned int CountBoxes(const pandora::CaloHitList &hits, const float boxSize, const float minX, const float maxX, const float minZ, const float maxZ) const;
 
-    std::string  m_pfoListName;                ///< The input vector of pfo list names
-    std::string  m_vertexListName;             ///< The input list of vertices - must be of size one: the neutrino vertex
-    std::string  m_clusterListNameU;           ///< The input list of clusters in the U view
-    std::string  m_clusterListNameV;           ///< The input list of clusters in the V view
-    std::string  m_clusterListNameW;           ///< The input list of clusters in the W view
-    std::string  m_clusterListName3D;          ///< The input list of 3D clusters
-    float        m_isolatedHitDistance;        ///< The separation distance from all other hits for to be considered isolated
-    float        m_stitchingThreshold;         ///< The threshold distance within which two segments of hits should be stitched
-    float        m_transverseBias;             ///< The amount by which we bias the transverse coordinate over the longitudinal when finding the nearest neighbor
-    int          m_nSampleHits;                ///< The number of hits to sample either side of a given hit to find a kink
-    float        m_cosAngleThreshold;          ///< The cosine angle below which we identify a kink
-    float        m_maxMatchDeltaX;             ///< The maxiumum delta X between kink positions to be considered a match between views
-    float        m_maxMatch3ViewChi2;          ///< The maximum chi2 for kinks from three views to be considered a match
-    float        m_twoViewProjectionThreshold; ///< The threshold distance for a 2-view match when we project the 3D position into the remaining view
+    std::string           m_pfoListName;                ///< The input pfo list name to modify
+    std::string           m_vertexListName;             ///< The input list of vertices - must be of size one: the neutrino vertex
+    std::string           m_clusterListNameU;           ///< The input list of clusters in the U view
+    std::string           m_clusterListNameV;           ///< The input list of clusters in the V view
+    std::string           m_clusterListNameW;           ///< The input list of clusters in the W view
+    std::string           m_clusterListName3D;          ///< The input list of 3D clusters
+    float                 m_isolatedHitDistance;        ///< The separation distance from all other hits for to be considered isolated
+    float                 m_stitchingThreshold;         ///< The threshold distance within which two segments of hits should be stitched
+    float                 m_transverseBias;             ///< The amount by which we bias the transverse coordinate over the longitudinal when finding the nearest neighbor
+    int                   m_nSampleHits;                ///< The number of hits to sample either side of a given hit to find a kink
+    float                 m_cosAngleThreshold;          ///< The cosine angle below which we identify a kink
+    float                 m_maxMatchDeltaX;             ///< The maxiumum delta X between kink positions to be considered a match between views
+    float                 m_maxMatch3ViewChi2;          ///< The maximum chi2 for kinks from three views to be considered a match
+    float                 m_twoViewProjectionThreshold; ///< The threshold distance for a 2-view match when we project the 3D position into the remaining view
 };
 
 } // namespace lar_content

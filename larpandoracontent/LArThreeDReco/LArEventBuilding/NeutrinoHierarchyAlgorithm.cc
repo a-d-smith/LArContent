@@ -49,6 +49,29 @@ void NeutrinoHierarchyAlgorithm::SeparatePfos(const PfoInfoMap &pfoInfoMap, PfoV
 
 //------------------------------------------------------------------------------------------------------------------------------------------
 
+bool NeutrinoHierarchyAlgorithm::IsLinkCyclical(const PfoInfoMap &pfoInfoMap, const ParticleFlowObject *const pParent, const ParticleFlowObject *const pDaughter) const
+{
+    // If the parent & daughter are the same then it's clearly cyclical
+    if (pDaughter == pParent)
+        return true;
+
+    const auto iter = pfoInfoMap.find(pDaughter);
+    if (iter == pfoInfoMap.end())
+        throw StatusCodeException(STATUS_CODE_NOT_FOUND);
+
+    // Now check the daughters of the daughter
+    const auto grandDaughters = iter->second->GetDaughterPfoList();
+    for (const auto &pGrandDaughter : grandDaughters)
+    {
+        if (this->IsLinkCyclical(pfoInfoMap, pParent, pGrandDaughter))
+            return true;
+    }
+
+    return false;
+}
+
+//------------------------------------------------------------------------------------------------------------------------------------------
+
 StatusCode NeutrinoHierarchyAlgorithm::Run()
 {
     const ParticleFlowObject *pNeutrinoPfo(nullptr);
@@ -81,6 +104,8 @@ StatusCode NeutrinoHierarchyAlgorithm::Run()
 
             for (PfoRelationTool *const pPfoRelationTool : m_algorithmToolVector)
                 pPfoRelationTool->Run(this, pNeutrinoVertex, pfoInfoMap);
+
+            this->AssignRemainingPfos(pNeutrinoVertex, pfoInfoMap);
         }
 
         this->ProcessPfoInfoMap(pNeutrinoPfo, candidateDaughterPfoList, pfoInfoMap);
@@ -131,12 +156,19 @@ void NeutrinoHierarchyAlgorithm::GetCandidateDaughterPfoList(PfoList &candidateD
 
         if (STATUS_CODE_SUCCESS == PandoraContentApi::GetList(*this, daughterPfoListName, pCandidatePfoList))
         {
+            std::cout << "Collecting PFOs in list: " << daughterPfoListName << ". Found, " << pCandidatePfoList->size() << std::endl;  //// DEBUG
             candidateDaughterPfoList.insert(candidateDaughterPfoList.end(), pCandidatePfoList->begin(), pCandidatePfoList->end());
         }
         else if (PandoraContentApi::GetSettings(*this)->ShouldDisplayAlgorithmInfo())
         {
             std::cout << "NeutrinoHierarchyAlgorithm: unable to find pfo list " << daughterPfoListName << std::endl;
         }
+        //// BEGIN DEBUG
+        else
+        {
+            std::cout << "NeutrinoHierarchyAlgorithm: unable to find pfo list " << daughterPfoListName << std::endl;
+        }
+        //// END DEBUG
     }
 
     if (candidateDaughterPfoList.empty())
@@ -164,6 +196,17 @@ void NeutrinoHierarchyAlgorithm::GetInitialPfoInfoMap(const PfoList &pfoList, Pf
                 std::cout << "NeutrinoHierarchyAlgorithm: Unable to calculate pfo information " << std::endl;
 
             delete pPfoInfo;
+        }
+    }
+
+    // Remove any existing parent-daughter relationships, to be added later once the PFO info map is processed
+    for (const ParticleFlowObject *const pPfo : pfoList)
+    {
+        const auto daughterPfos = pPfo->GetDaughterPfoList();
+        for (const auto &pDaughterPfo : daughterPfos)
+        {
+            std::cout << "Removing parent daughter relation: " << pPfo << " -> " << pDaughterPfo << std::endl;
+            PANDORA_THROW_RESULT_IF(STATUS_CODE_SUCCESS, !=, PandoraContentApi::RemovePfoParentDaughterRelationship(*this, pPfo, pDaughterPfo));
         }
     }
 }
@@ -195,36 +238,82 @@ void NeutrinoHierarchyAlgorithm::ProcessPfoInfoMap(const ParticleFlowObject *con
         const PfoInfo *const pPfoInfo(pfoInfoMap.at(pPfo));
 
         PfoVector daughterPfos(pPfoInfo->GetDaughterPfoList().begin(), pPfoInfo->GetDaughterPfoList().end());
-            
-        //// BEGIN TEST
-        // Add the existing daughter PFOs to the vector
-        const auto existingDaughters = pPfo->GetDaughterPfoList();
-        for (const auto &pDaughterPfo : existingDaughters)
-        {
-            // Remove the relationship (to be added back later in sorted order)
-            PANDORA_THROW_RESULT_IF(STATUS_CODE_SUCCESS, !=, PandoraContentApi::RemovePfoParentDaughterRelationship(*this, pPfoInfo->GetThisPfo(), pDaughterPfo));
-
-            if (std::find(daughterPfos.begin(), daughterPfos.end(), pDaughterPfo) == daughterPfos.end())
-                daughterPfos.push_back(pDaughterPfo);
-        }
-        //// END TEST
-        
         std::sort(daughterPfos.begin(), daughterPfos.end(), LArPfoHelper::SortByNHits);
 
         for (const ParticleFlowObject *const pDaughterPfo : daughterPfos)
-        {
             PANDORA_THROW_RESULT_IF(STATUS_CODE_SUCCESS, !=, PandoraContentApi::SetPfoParentDaughterRelationship(*this, pPfoInfo->GetThisPfo(), pDaughterPfo));
-        }
     }
 
-    // Deal with any remaining parent-less pfos
+    // Deal with any remaining parent-less pfos adding them as a daughter of the neutrino
     for (const ParticleFlowObject *const pRemainingPfo : candidateDaughterPfoVector)
     {
-        if (!pRemainingPfo->GetParentPfoList().empty())
+        // ATTN this should only happen for pfos for which the pfo info couldn't be created
+        if (pRemainingPfo->GetParentPfoList().empty())
+            PANDORA_THROW_RESULT_IF(STATUS_CODE_SUCCESS, !=, PandoraContentApi::SetPfoParentDaughterRelationship(*this, pNeutrinoPfo, pRemainingPfo));
+    }
+}
+
+//------------------------------------------------------------------------------------------------------------------------------------------
+
+void NeutrinoHierarchyAlgorithm::AssignRemainingPfos(const Vertex *const pNeutrinoVertex, PfoInfoMap &pfoInfoMap) const
+{
+    PfoVector assignedPfos, unassignedPfos;
+    this->SeparatePfos(pfoInfoMap, assignedPfos, unassignedPfos);
+
+    // Deal with any remaining parent-less pfos by adding them to the nearest avialable pfo
+    for (const ParticleFlowObject *const pRemainingPfo : unassignedPfos)
+    {
+        const auto pfoInfoIter = pfoInfoMap.find(pRemainingPfo);
+        if (pfoInfoIter == pfoInfoMap.end())
             continue;
 
-        // TODO Most appropriate decision - add as daughter of either i) nearest pfo, or ii) the neutrino (current approach)
-        PANDORA_THROW_RESULT_IF(STATUS_CODE_SUCCESS, !=, PandoraContentApi::SetPfoParentDaughterRelationship(*this, pNeutrinoPfo, pRemainingPfo));
+        const auto pPfoInfo = pfoInfoIter->second;
+
+        const auto pSlidingFitResult = pPfoInfo->GetSlidingFitResult3D();
+        const auto endMin = pSlidingFitResult->GetGlobalMinLayerPosition();
+        const auto endMax = pSlidingFitResult->GetGlobalMaxLayerPosition();
+
+        const auto vertexPos = pNeutrinoVertex->GetPosition();
+        const auto vertexDistSquared = std::min(endMin.GetDistanceSquared(vertexPos), endMax.GetDistanceSquared(vertexPos)); 
+
+        float bestParentDistSquared = std::numeric_limits<float>::max();
+        const ParticleFlowObject *pBestParent = nullptr;
+
+        for (const auto pParentPfo : assignedPfos)
+        {
+            if (this->IsLinkCyclical(pfoInfoMap, pParentPfo, pRemainingPfo))
+                continue;
+
+            const auto parentPfoInfoIter = pfoInfoMap.find(pParentPfo);
+            if (parentPfoInfoIter == pfoInfoMap.end())
+                continue;
+
+            const auto pParentPfoInfo = parentPfoInfoIter->second;
+            const auto pParentSlidingFitResult = pParentPfoInfo->GetSlidingFitResult3D();
+            const auto parentEndMin = pParentSlidingFitResult->GetGlobalMinLayerPosition();
+            const auto parentEndMax = pParentSlidingFitResult->GetGlobalMaxLayerPosition();
+
+            const auto minDistSquared = std::min(std::min(endMin.GetDistanceSquared(parentEndMin), endMin.GetDistanceSquared(parentEndMax)),
+                    std::min(endMax.GetDistanceSquared(parentEndMin), endMax.GetDistanceSquared(parentEndMax)));
+
+            if (minDistSquared > bestParentDistSquared)
+                continue;
+
+            bestParentDistSquared = minDistSquared;
+            pBestParent = pParentPfo;
+        }
+
+        if (!pBestParent || bestParentDistSquared > vertexDistSquared)
+        {
+            // Assign to the neutrino
+            pPfoInfo->SetNeutrinoVertexAssociation(true);
+            continue;
+        }
+
+        // Assign to the best available parent
+        auto &pBestParentPfoInfo = pfoInfoMap.at(pBestParent);
+        pBestParentPfoInfo->AddDaughterPfo(pPfoInfo->GetThisPfo());
+        pPfoInfo->SetParentPfo(pBestParentPfoInfo->GetThisPfo());
     }
 }
 
@@ -292,9 +381,8 @@ NeutrinoHierarchyAlgorithm::PfoInfo::PfoInfo(const pandora::ParticleFlowObject *
     m_isNeutrinoVertexAssociated(false),
     m_isInnerLayerAssociated(false),
     m_pParentPfo(nullptr),
-    m_daughterPfoList(pPfo->GetDaughterPfoList()) //// TEST
+    m_daughterPfoList(pPfo->GetDaughterPfoList())
 {
-    //// BEGIN TEST
     const auto parentList = pPfo->GetParentPfoList();
     if (!parentList.empty())
     {
@@ -303,7 +391,6 @@ NeutrinoHierarchyAlgorithm::PfoInfo::PfoInfo(const pandora::ParticleFlowObject *
 
         m_pParentPfo = parentList.front();
     }
-    //// END TEST
 
     ClusterList clusterList3D;
     LArPfoHelper::GetThreeDClusterList(pPfo, clusterList3D);

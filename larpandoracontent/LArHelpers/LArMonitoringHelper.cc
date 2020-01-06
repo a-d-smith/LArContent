@@ -162,6 +162,17 @@ void LArMonitoringHelper::PrintMCParticleTable(const LArMCParticleHelper::MCCont
 
 //------------------------------------------------------------------------------------------------------------------------------------------
 
+void LArMonitoringHelper::PrintPfoHierarchy(const PfoList &pfoList, const unsigned int depth)
+{
+    for (const auto &pPfo : pfoList)
+    {
+        std::cout << std::string(depth*4, ' ') << pPfo << "(" << pPfo->GetParticleId() << ")" << std::endl;
+        LArMonitoringHelper::PrintPfoHierarchy(pPfo->GetDaughterPfoList(), depth + 1);
+    }
+}
+
+//------------------------------------------------------------------------------------------------------------------------------------------
+
 void LArMonitoringHelper::PrintPfoTable(const LArMCParticleHelper::PfoContributionMap &pfoToReconstructable2DHitsMap, const PfoVector &orderedPfoVector)
 {
     if (pfoToReconstructable2DHitsMap.empty())

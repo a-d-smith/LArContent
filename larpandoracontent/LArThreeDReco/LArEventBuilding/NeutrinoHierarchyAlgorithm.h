@@ -178,6 +178,17 @@ public:
      */
     void SeparatePfos(const NeutrinoHierarchyAlgorithm::PfoInfoMap &pfoInfoMap, pandora::PfoVector &assignedPfos, pandora::PfoVector &unassignedPfos) const;
 
+    /**
+     *  @brief  Given a candidate parent daughter link, check whether this link would introduce a cyclical hierarchy
+     *
+     *  @param  pfoInfoMap the pfo info map
+     *  @param  pParent the candidate parent
+     *  @param  pDaughter the candidate daughter
+     *
+     *  @return if this parent/daughter link would create a cycle
+     */
+    bool IsLinkCyclical(const PfoInfoMap &pfoInfoMap, const pandora::ParticleFlowObject *const pParent, const pandora::ParticleFlowObject *const pDaughter) const;
+
 private:
     pandora::StatusCode Run();
 
@@ -212,6 +223,14 @@ private:
      */
     void ProcessPfoInfoMap(const pandora::ParticleFlowObject *const pNeutrinoPfo, const pandora::PfoList &candidateDaughterPfoList,
         const PfoInfoMap &pfoInfoMap) const;
+
+    /**
+     *  @brief  Assign any pfos that are currently parentless to the nearest available parented pfo, else default to the neutrino vertex
+     *
+     *  @param  pNeutrinoVertex the neutrino vertex
+     *  @param  pfoInfoMap the pfo info map
+     */
+    void AssignRemainingPfos(const pandora::Vertex *const pNeutrinoVertex, PfoInfoMap &pfoInfoMap) const;
 
     /**
      *  @brief  Display the information in a pfo info map, visualising pfo parent/daughter links
