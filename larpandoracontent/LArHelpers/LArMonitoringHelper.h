@@ -56,6 +56,14 @@ public:
     static void PrintMCParticleTable(const LArMCParticleHelper::MCContributionMap &selectedMCParticleToGoodHitsMaps, const pandora::MCParticleVector &orderedMCParticleVector);
 
     /**
+     *  @brief  Print the hierarchy seeded from the input pfo list
+     *
+     *  @param  pfoList the input pfo list
+     *  @param  depth the number of indents to use when printing the pfos in this list
+     */
+    static void PrintPfoHierarchy(const pandora::PfoList &pfoList, const unsigned int depth = 0);
+
+    /**
      *  @brief  Print details of input Pfos to the terminal in a table.
      *
      *  @param  pfoToReconstructable2DHitsMap the input vector of mappings from Pfos to their reconstructable hits

@@ -10,6 +10,8 @@
 
 #include "larpandoracontent/LArThreeDReco/LArSecondaryInteractions/SecondaryInteractionsAlgorithm.h"
 
+#include "larpandoracontent/LArObjects/LArThreeDSlidingFitResult.h"
+
 #include "larpandoracontent/LArHelpers/LArPfoHelper.h"
 #include "larpandoracontent/LArHelpers/LArGeometryHelper.h"
 #include "larpandoracontent/LArHelpers/LArPcaHelper.h"
@@ -38,9 +40,148 @@ StatusCode SecondaryInteractionsAlgorithm::Run()
 {
     // Get the input collections
     PfoList inputPfos;
-    this->CollectInputPfos(inputPfos);
+    this->CollectInputPfos(inputPfos, m_pfoListName);
     const auto pVertex = this->GetVertex();
     
+    //// BEGIN TEST
+    /*
+    PfoList allPfos = inputPfos;
+    for (const auto &pfoListName : m_otherPfoListNames)
+        this->CollectInputPfos(allPfos, pfoListName);
+
+    std::cout << "NEW EVENT" << std::endl;
+    std::unordered_map<const ParticleFlowObject *, CartesianVector> pfoToMinPointMap, pfoToMaxPointMap;
+    std::unordered_map<const ParticleFlowObject *, bool> pfoToCanFitMap;
+    for (const auto &pPfo : allPfos)
+    {
+        pfoToCanFitMap.emplace(pPfo, false);
+
+        ClusterList clusters3D;
+        LArPfoHelper::GetThreeDClusterList(pPfo, clusters3D);
+
+        const auto dummy = std::numeric_limits<float>::max();
+        CartesianVector minPoint(dummy, dummy, dummy);
+        CartesianVector maxPoint(dummy, dummy, dummy);
+
+        try
+        {
+            const ThreeDSlidingFitResult slidingFitResult(clusters3D.front(), 5, LArGeometryHelper::GetWirePitch(this->GetPandora(), TPC_VIEW_W));
+
+            minPoint = slidingFitResult.GetGlobalMinLayerPosition();
+            maxPoint = slidingFitResult.GetGlobalMaxLayerPosition();
+        }
+        catch (const StatusCodeException &)
+        {
+            continue;
+        }
+
+        pfoToMinPointMap.emplace(pPfo, minPoint);
+        pfoToMaxPointMap.emplace(pPfo, maxPoint);
+        pfoToCanFitMap.at(pPfo) = true;
+    }
+
+    std::unordered_map<const ParticleFlowObject *, const ParticleFlowObject *> pfoToParentMap;
+    std::unordered_map<const ParticleFlowObject *, bool> pfoToIsVertexAssociated;
+
+    PfoList remainingPfos = allPfos;
+    PfoList parentedPfos;
+    const auto vertexPos = pVertex->GetPosition();
+
+    while (!remainingPfos.empty())
+    {
+        std::cout << "Remaining PFOs: " << remainingPfos.size() << std::endl;
+        std::cout << "Parented PFOs:  " << parentedPfos.size() << std::endl;
+
+        auto minDistSquared = std::numeric_limits<float>::max();
+        const ParticleFlowObject *pBestChild = nullptr;
+        const ParticleFlowObject *pBestParent = nullptr;
+        bool isVertexBestMatch = true;
+
+        for (const auto &pPfo : remainingPfos)
+        {
+            std::cout << "  - Testing remaining PFO: " << pPfo << std::endl;
+
+            if (!pfoToCanFitMap.at(pPfo))
+                continue;
+            
+            std::cout << "    - Has endpoints" << std::endl;
+
+            const auto minPoint = pfoToMinPointMap.at(pPfo);
+            const auto maxPoint = pfoToMaxPointMap.at(pPfo);
+            
+            // Get the distance to the vertex
+            const auto vertexDistSquared = std::min(minPoint.GetDistanceSquared(vertexPos), maxPoint.GetDistanceSquared(vertexPos));
+
+            if (vertexDistSquared < minDistSquared)
+            {
+                pBestChild = pPfo;
+                isVertexBestMatch = true;
+                minDistSquared = vertexDistSquared;
+
+                std::cout << "    - Vertex is current best match with: " << minDistSquared << std::endl;
+            }
+
+            // Get the smallest distance to a parented pfo
+            for (const auto &pParentPfo : parentedPfos)
+            {
+                if (!pfoToCanFitMap.at(pParentPfo))
+                    continue;
+
+                const auto parentMinPoint = pfoToMinPointMap.at(pParentPfo);
+                const auto parentMaxPoint = pfoToMaxPointMap.at(pParentPfo);
+
+                const auto distSquared = std::min(std::min(minPoint.GetDistanceSquared(parentMinPoint), minPoint.GetDistanceSquared(parentMaxPoint)),
+                                                  std::min(maxPoint.GetDistanceSquared(parentMinPoint), maxPoint.GetDistanceSquared(parentMaxPoint)));
+
+                if (distSquared < minDistSquared)
+                {
+                    pBestChild = pPfo;
+                    pBestParent = pParentPfo;
+                    isVertexBestMatch = false;
+                    minDistSquared = distSquared;
+                
+                    std::cout << "    - PFO " << pBestParent << " is current best match with: " << minDistSquared << std::endl;
+                }
+            }
+        } 
+
+        // No matches found as no remaining pfos were able to be fit
+        if (!pBestChild)
+        {
+            std::cout << "No PFO was available, just choose the first one" << std::endl;
+
+            // Just assign the first one to the vertex
+            pBestChild = remainingPfos.front();
+            isVertexBestMatch = true;
+        }
+        
+        std::cout << "Best option is " << pBestChild << std::endl;
+        std::cout << "  - Parent: " << pBestParent << std::endl;
+
+        // Add to the output maps
+        pfoToIsVertexAssociated.emplace(pBestChild, isVertexBestMatch);
+        if (!isVertexBestMatch)
+            pfoToParentMap.emplace(pBestChild, pBestParent);
+
+        // Update the vectors
+        parentedPfos.push_back(pBestChild);
+        remainingPfos.remove(pBestChild);
+    }
+
+    std::cout << "Final result" << std::endl;
+    for (const auto &pPfo : allPfos)
+    {
+        std::cout << pPfo << std::endl;
+        const auto isVertexAssociated = pfoToIsVertexAssociated.at(pPfo);
+        std::cout << " - is vertex associated? : " << isVertexAssociated << std::endl;
+
+        if (!isVertexAssociated)
+            std::cout << " - parent : " << pfoToParentMap.at(pPfo) << std::endl;
+    }
+    */
+    //// END TEST
+
+
     // Make a temporary PFO list to work within
     std::string newPfoListName;
     const PfoList *pNewPfoList(nullptr);
@@ -70,11 +211,34 @@ StatusCode SecondaryInteractionsAlgorithm::Run()
 
 void SecondaryInteractionsAlgorithm::SplitPfo(const ParticleFlowObject *const pPfo, const Vertex *const pVertex, PfoList &pfosToSave, PfoList &pfosToDelete) const
 {
+    std::cout << "Checking if I should split PFO: " << pPfo << std::endl;
+
+    //// BEGIN TEST
+    CaloHitList threeDHits;
+    LArPfoHelper::GetCaloHits(pPfo, TPC_3D, threeDHits);
+    const auto has3DHits = !threeDHits.empty();
+
+    CartesianVector trackDir(0.f, 0.f, 0.f);
+    if (has3DHits)
+    {
+        CartesianVector centroid(0.f, 0.f, 0.f);
+        LArPcaHelper::EigenValues eigenvalues(0.f, 0.f, 0.f);
+        LArPcaHelper::EigenVectors eigenvectors;
+        LArPcaHelper::RunPca(threeDHits, centroid, eigenvalues, eigenvectors);
+        trackDir = eigenvectors.front();
+    }
+
+    if (!has3DHits)
+        return;
+    //// END TEST
+
     // Identify viable hits that lie on viable 2D split positions and get the hierarchy of hits
     ViewToHitHierarchyMap viewToHitHierarchyMap;
     ViewToHitsMap viewToCaloHitsMap, viewToSplitHitsMap;
     for (const auto &view : {TPC_VIEW_U, TPC_VIEW_V, TPC_VIEW_W})
     {
+        auto &splitHits = viewToSplitHitsMap[view];
+
         auto &caloHits = viewToCaloHitsMap[view];
         LArPfoHelper::GetCaloHits(pPfo, view, caloHits);
 
@@ -87,18 +251,30 @@ void SecondaryInteractionsAlgorithm::SplitPfo(const ParticleFlowObject *const pP
         auto &hitHierarchy = viewToHitHierarchyMap[view];
         this->BuildHitHierarchy(pVertex, segments, hitHierarchy);
 
-        // TODO filter the segments before finding kinks
         //// TEST
+        // Filter the segments before finding kinks
+        const auto wireDir = CartesianVector(1.f, 0.f, 0.f).GetCrossProduct(LArGeometryHelper::GetWireAxis(this->GetPandora(), view));
+        const auto trackWireCosTheta = std::abs(trackDir.GetDotProduct(wireDir));
+        
+        if (trackWireCosTheta > 0.95)
+            continue;
+
         std::vector<CaloHitList> selectedSegments;
         for (const auto &segment : segments)
         {
-            if (segment.size() > 15)
-                selectedSegments.push_back(segment);
+            if (segment.size() < 15)
+                continue;
+       
+            /*
+            const auto dimension = this->GetDimension(segment);
+            std::cout << "      - Dimension: " << dimension << std::endl;
+            */
+
+            selectedSegments.push_back(segment);
         }
         //// END TEST
 
         // Get the hits that sit at a kink or bifurcation position
-        auto &splitHits = viewToSplitHitsMap[view];
         this->GetSplitHits(selectedSegments, separationMap, splitHits);
     }
 
@@ -110,6 +286,28 @@ void SecondaryInteractionsAlgorithm::SplitPfo(const ParticleFlowObject *const pP
         return;
 
     const auto chosenSplitPoint = this->Select3DSplitPoint(splitPoints3D, viewToCaloHitsMap, viewToHitHierarchyMap);
+    
+    //// BEGIN DEBUG
+    /*
+    for (const auto &view : {TPC_VIEW_U, TPC_VIEW_V, TPC_VIEW_W})
+    {
+        const auto hits = viewToCaloHitsMap.at(view);
+        PANDORA_MONITORING_API(VisualizeCaloHits(this->GetPandora(), &hits, "Hits", RED));
+    }
+
+    const auto point3D = chosenSplitPoint.m_position3D;
+    const auto pointU = LArGeometryHelper::ProjectPosition(this->GetPandora(), point3D, TPC_VIEW_U);
+    const auto pointV = LArGeometryHelper::ProjectPosition(this->GetPandora(), point3D, TPC_VIEW_V);
+    const auto pointW = LArGeometryHelper::ProjectPosition(this->GetPandora(), point3D, TPC_VIEW_W);
+
+    PANDORA_MONITORING_API(AddMarkerToVisualization(this->GetPandora(), &pointU, "SplitU", GREEN, 3));
+    PANDORA_MONITORING_API(AddMarkerToVisualization(this->GetPandora(), &pointV, "SplitV", GREEN, 3));
+    PANDORA_MONITORING_API(AddMarkerToVisualization(this->GetPandora(), &pointW, "SplitW", GREEN, 3));
+
+    PANDORA_MONITORING_API(ViewEvent(this->GetPandora()));
+    */
+    //// END DEBUG
+
 
     // Add the 3D hits the map
     auto &hits3D = viewToCaloHitsMap[TPC_3D];
@@ -118,6 +316,19 @@ void SecondaryInteractionsAlgorithm::SplitPfo(const ParticleFlowObject *const pP
     // Split the hits in each view upstream and downstream of the split position using the hierarchy
     ViewToHitsMap viewToUpstreamHitsMap, viewToDownstreamHitsMap;
     this->SplitPfoHits(viewToCaloHitsMap, viewToHitHierarchyMap, chosenSplitPoint, viewToUpstreamHitsMap, viewToDownstreamHitsMap);
+
+    //// BEGIN DEBUG
+    /*
+    for (const auto &view : {TPC_VIEW_U, TPC_VIEW_V, TPC_VIEW_W})
+    {
+        const auto upstreamHits = viewToUpstreamHitsMap.at(view);
+        const auto downstreamHits = viewToDownstreamHitsMap.at(view);
+        PANDORA_MONITORING_API(VisualizeCaloHits(this->GetPandora(), &upstreamHits, "Upstream", RED));
+        PANDORA_MONITORING_API(VisualizeCaloHits(this->GetPandora(), &downstreamHits, "Downstream", BLUE));
+    }
+    PANDORA_MONITORING_API(ViewEvent(this->GetPandora()));
+    */
+    //// END DEBUG
 
     // Now make the clusters and PFOs for these upstream and downstream segments
     ClusterList upstreamClusters, downstreamClusters;
@@ -141,12 +352,15 @@ const Vertex *SecondaryInteractionsAlgorithm::GetVertex() const
 
 // -----------------------------------------------------------------------------------------------------------------------------------------
 
-void SecondaryInteractionsAlgorithm::CollectInputPfos(PfoList &inputPfos) const
+void SecondaryInteractionsAlgorithm::CollectInputPfos(PfoList &inputPfos, const std::string &pfoListName) const
 {
     const PfoList *pPfoList = nullptr;
+    PfoList collectedPfos;
 
-    if (PandoraContentApi::GetList(*this, m_pfoListName, pPfoList) == STATUS_CODE_SUCCESS)
-        inputPfos.insert(inputPfos.end(), pPfoList->begin(), pPfoList->end());
+    if (PandoraContentApi::GetList(*this, pfoListName, pPfoList) == STATUS_CODE_SUCCESS)
+        collectedPfos.insert(collectedPfos.end(), pPfoList->begin(), pPfoList->end());
+
+    LArPfoHelper::GetAllDownstreamPfos(collectedPfos, inputPfos);
 }
 
 // -----------------------------------------------------------------------------------------------------------------------------------------
@@ -644,6 +858,9 @@ void SecondaryInteractionsAlgorithm::GetDownstreamHits(const CaloHitHierarchyMap
 
 void SecondaryInteractionsAlgorithm::GetSplitHits(const std::vector<CaloHitList> &continuousSegments, const HitSeparationMap &separationMap, CaloHitList &splitHits) const
 {
+    if (continuousSegments.empty())
+        return;
+
     // Collect hits at possible split points: kinks, bifurcations
     CaloHitList collectedHits;
     this->GetBifurcationHits(continuousSegments, separationMap, collectedHits);
@@ -1138,6 +1355,35 @@ void SecondaryInteractionsAlgorithm::SplitHitListAtPoint(const HitType view, con
         const auto projectedPosition = LArGeometryHelper::ProjectPosition(this->GetPandora(), chosenSplitPoint.m_position3D, view);
         pSplitHit = this->GetClosestHitToPoint(caloHits, projectedPosition);
     }
+
+    //// BEGIN DEBUG
+    /*
+    PANDORA_MONITORING_API(VisualizeCaloHits(this->GetPandora(), &caloHits, "Hits", AUTO));
+    for (const auto &pCaloHit : caloHits)
+    {
+        const auto iter = hitHierarchyMap.find(pCaloHit);
+        if (iter == hitHierarchyMap.end())
+            continue;
+
+        const auto pos = pCaloHit->GetPositionVector();
+        const auto &daughters = iter->second;
+        for (const auto &pDaughterHit : daughters)
+        {
+            const auto daughterPos = pDaughterHit->GetPositionVector();
+            
+            const auto arrowA = daughterPos + ((daughterPos - pos).GetUnitVector().GetCrossProduct(CartesianVector(0.f, 1.f, 0.f)) * (+1) - (daughterPos - pos).GetUnitVector()) * 0.1;
+            const auto arrowB = daughterPos + ((daughterPos - pos).GetUnitVector().GetCrossProduct(CartesianVector(0.f, 1.f, 0.f)) * (-1) - (daughterPos - pos).GetUnitVector()) * 0.1;
+            
+            PANDORA_MONITORING_API(AddLineToVisualization(this->GetPandora(), &pos, &daughterPos, "", RED, 1, 1));
+            PANDORA_MONITORING_API(AddLineToVisualization(this->GetPandora(), &daughterPos, &arrowA, "", RED, 1, 1));
+            PANDORA_MONITORING_API(AddLineToVisualization(this->GetPandora(), &daughterPos, &arrowB, "", RED, 1, 1));
+        }
+    }
+    const auto splitHitPos = pSplitHit->GetPositionVector();
+    PANDORA_MONITORING_API(AddMarkerToVisualization(this->GetPandora(), &splitHitPos, "", BLUE, 2));
+    PANDORA_MONITORING_API(ViewEvent(this->GetPandora()));
+    */
+    //// END DEBUG
     
     this->GetDownstreamHits(hitHierarchyMap, pSplitHit, downstreamHits);
     for (const auto &pCaloHit : caloHits)
@@ -1224,11 +1470,13 @@ void SecondaryInteractionsAlgorithm::SplitPfoClusters(const ParticleFlowObject *
                 clusterListName = m_clusterListNameW;
                 break;
             case TPC_3D:
-                clusterListName = m_clusterListName3D;
+                clusterListName = LArPfoHelper::IsTrack(pPfo) ? "TrackClusters3D" : "ShowerClusters3D"; // m_clusterListName3D; // TODO make this better
                 break;
             default:
                 throw StatusCodeException(STATUS_CODE_NOT_FOUND);
         }
+
+        std::cout << "Splitting cluster in list: " << clusterListName << std::endl;
 
         const StatusCode listChangeStatusCode(PandoraContentApi::ReplaceCurrentList<Cluster>(*this, clusterListName));
         if (listChangeStatusCode == STATUS_CODE_NOT_FOUND)
@@ -1304,6 +1552,103 @@ void SecondaryInteractionsAlgorithm::SplitPfo(const ParticleFlowObject *const pP
             
     // Make the parent daughter link
     PANDORA_THROW_RESULT_IF(STATUS_CODE_SUCCESS, !=, PandoraContentApi::SetPfoParentDaughterRelationship(*this, pUpstreamPfo, pDownstreamPfo));
+}
+
+// -----------------------------------------------------------------------------------------------------------------------------------------
+
+float SecondaryInteractionsAlgorithm::GetDimension(const CaloHitList &hits) const
+{
+    if (hits.size() <= 1)
+        throw StatusCodeException(STATUS_CODE_INVALID_PARAMETER);
+
+    float minX = std::numeric_limits<float>::max();
+    float minZ = std::numeric_limits<float>::max();
+    float maxX = -std::numeric_limits<float>::max();
+    float maxZ = -std::numeric_limits<float>::max();
+
+    for (const auto &pHit : hits)
+    {
+        const auto view = pHit->GetHitType();
+        if (view != TPC_VIEW_U && view != TPC_VIEW_V && view != TPC_VIEW_W)
+            throw StatusCodeException(STATUS_CODE_INVALID_PARAMETER);
+
+        const auto pos = pHit->GetPositionVector();
+        const auto x = pos.GetX();
+        const auto z = pos.GetZ();
+
+        minX = std::min(x, minX);
+        minZ = std::min(z, minZ);
+        maxX = std::max(x, maxX);
+        maxZ = std::max(z, maxZ);
+    }
+
+    // Ensure to floating point accuracy all hits are within the bounds
+    minX -= std::numeric_limits<float>::epsilon();
+    maxX += std::numeric_limits<float>::epsilon();
+    minZ -= std::numeric_limits<float>::epsilon();
+    maxZ += std::numeric_limits<float>::epsilon();
+   
+    const auto deltaX = maxX - minX;
+    const auto deltaZ = maxZ - minZ;
+    const auto maxBoxSize = std::max(deltaX, deltaZ);
+
+    const auto boxSize = 0.3 * 2;
+    const auto nBoxes = this->CountBoxes(hits, boxSize, minX, maxX, minZ, maxZ);
+
+    const auto boxSizeFactor = std::log(maxBoxSize / boxSize);
+    const auto nBoxesFactor = std::log(nBoxes);
+    const auto D = nBoxesFactor / boxSizeFactor;
+
+    LArFormattingHelper::Table table({"minX", "maxX", "minZ", "maxZ", "", "maxBoxSize", "boxSize", "", "nBoxes", "D"});
+    table.AddElement(minX);
+    table.AddElement(maxX);
+    table.AddElement(minZ);
+    table.AddElement(maxZ);
+    table.AddElement(maxBoxSize);
+    table.AddElement(boxSize);
+    table.AddElement(nBoxes);
+    table.AddElement(D);
+    table.Print();
+
+    return 0.f;    
+}
+
+// -----------------------------------------------------------------------------------------------------------------------------------------
+
+unsigned int SecondaryInteractionsAlgorithm::CountBoxes(const CaloHitList &hits, const float boxSize, const float minX, const float maxX, const float minZ, const float maxZ) const
+{
+    const auto nBoxesX = static_cast<unsigned int>(std::ceil((maxX - minX) / boxSize));
+    const auto nBoxesZ = static_cast<unsigned int>(std::ceil((maxZ - minZ) / boxSize));
+
+    // Make a "matrix" of size nBoxesX:nBoxesZ with every element initialized to false
+    std::vector< std::vector<bool> > counter(nBoxesX, std::vector<bool>(nBoxesZ, false));
+    for (const auto &pHit : hits)
+    {
+        const auto pos = pHit->GetPositionVector();
+        const auto x = pos.GetX();
+        const auto z = pos.GetZ();
+
+        if (x < minX || x > maxX || z < minZ || z > maxZ)
+            throw StatusCodeException(STATUS_CODE_INVALID_PARAMETER);
+
+        const auto iX = static_cast<unsigned int>(std::floor((x - minX) / boxSize));
+        const auto iZ = static_cast<unsigned int>(std::floor((z - minZ) / boxSize));
+
+        // Set the counter to true in this bin, there is a hit there
+        counter.at(iX).at(iZ) = true;
+    }
+
+    unsigned int nBoxes = 0;
+    for (unsigned int iX = 0; iX < nBoxesX; ++iX)
+    {
+        for (unsigned int iZ = 0; iZ < nBoxesZ; ++iZ)
+        {
+            if (counter.at(iX).at(iZ))
+                nBoxes++;
+        }
+    }
+
+    return nBoxes;
 }
 
 // -----------------------------------------------------------------------------------------------------------------------------------------
