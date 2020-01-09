@@ -83,6 +83,7 @@ private:
         void SetMaxDeltaX();
     };
 
+    typedef std::map<const pandora::ParticleFlowObject *const, pandora::CartesianVector> PfoToCartesianVectorMap;
     typedef std::map<const pandora::CaloHit *const, std::map<const pandora::CaloHit *const, float> > HitSeparationMap;
     typedef std::map<const pandora::CaloHit *, std::vector<const pandora::CaloHit *> > CaloHitHierarchyMap;
     typedef std::map<pandora::HitType, pandora::CaloHitList> ViewToHitsMap;
@@ -93,9 +94,9 @@ private:
     /**
      *  @brief  Get the vertex from the input list name
      *
-     *  @return pVertex the output vertex
+     *  @return the output vertex position
      */
-    const pandora::Vertex *GetVertex() const;
+    pandora::CartesianVector GetVertexPosition() const;
 
     /**
      *  @brief  Collect the pfos from the input pfo list
@@ -106,15 +107,24 @@ private:
     void CollectInputPfos(pandora::PfoList &inputPfos, const std::string &pfoListName) const;
 
     /**
+     *  @brief  Get a vertex position for each pfo from which we should seed the kink finding
+     *
+     *  @param  allPfos the input list of all pfos
+     *  @param  vertexPos the neutrino vertex position
+     *  @param  pfoToSeedPointMap the output mapping from pfo to seed position
+     */
+    void GetSeedVertices(const pandora::PfoList &allPfos, const pandora::CartesianVector &vertexPos, PfoToCartesianVectorMap &pfoToSeedPointMap) const;
+
+    /**
      *  @brief  Split the input PFO if a viable split point can be found
      *          When splitting a PFO create two new PFOs to replace the old one, the PFOs to save and delete are tracked in the output lists
      *
      *  @param  pPfo the input PFO
-     *  @param  pVertex the neutrino vertex
+     *  @param  vertexPos the neutrino vertex
      *  @param  pfosToSave the new PFOs to save
      *  @param  pfosToDelete the old PFOs to delete
      */
-    void SplitPfo(const pandora::ParticleFlowObject *const pPfo, const pandora::Vertex *const pVertex, pandora::PfoList &pfosToSave, pandora::PfoList &pfosToDelete) const;
+    void SplitPfo(const pandora::ParticleFlowObject *const pPfo, const pandora::CartesianVector &vertexPos, pandora::PfoList &pfosToSave, pandora::PfoList &pfosToDelete) const;
 
     /**
      *  @brief  Get the mapping between pairs of hits and their separation, only stored if separation is within the isolated hit distance threshold
@@ -136,12 +146,12 @@ private:
     /**
      *  @brief  Get the continuous hit segments by linking hits via nearest neighbor
      *
-     *  @param  pVertex the input neutrino vertex
+     *  @param  vertexPos the input neutrino vertex
      *  @param  caloHitList the input list of hits
      *  @param  separationMap the separation map
      *  @param  continuousSegments the output vector of continuous segments
      */
-    void GetContinuousSegments(const pandora::Vertex *const pVertex, const pandora::CaloHitList &caloHitList, const HitSeparationMap &separationMap, std::vector<pandora::CaloHitList> &continuousSegments) const;
+    void GetContinuousSegments(const pandora::CartesianVector &vertexPos, const pandora::CaloHitList &caloHitList, const HitSeparationMap &separationMap, std::vector<pandora::CaloHitList> &continuousSegments) const;
 
     /**
      *  @brief  Get the hit in the input list that is closest to the input point
@@ -157,11 +167,11 @@ private:
      *  @brief  Get the hit in the input list that is closest to the vertex, if using 2D hits then use projected distances
      *
      *  @param  caloHitList the input list of hits
-     *  @param  pVertex the input vertex
+     *  @param  vertexPos the input vertex
      *
      *  @return the closest hit in the input list to the vertex
      */
-    const pandora::CaloHit *GetClosestHitToVertex(const pandora::CaloHitList &caloHitList, const pandora::Vertex *const pVertex) const;
+    const pandora::CaloHit *GetClosestHitToVertex(const pandora::CaloHitList &caloHitList, const pandora::CartesianVector &vertexPos) const;
 
     /**
      *  @brief  Collect all of the hits that link with the input seed hit and are in the input list of remaining hits
@@ -197,11 +207,11 @@ private:
     /**
      *  @brief  Build the hierarchy of hits
      *
-     *  @param  pVertex the neutrino vertex
+     *  @param  vertexPos the neutrino vertex
      *  @param  continuousSegments the input vector of continuous segments
      *  @param  hitHierarchy the ouput hit hierarchy map
      */
-    void BuildHitHierarchy(const pandora::Vertex *const pVertex, const std::vector<pandora::CaloHitList> &continuousSegments, CaloHitHierarchyMap &hitHierarchy) const;
+    void BuildHitHierarchy(const pandora::CartesianVector &vertexPos, const std::vector<pandora::CaloHitList> &continuousSegments, CaloHitHierarchyMap &hitHierarchy) const;
 
 
     // TODO doxygen comments
@@ -229,12 +239,13 @@ private:
     float GetDimension(const pandora::CaloHitList &hits) const;
     unsigned int CountBoxes(const pandora::CaloHitList &hits, const float boxSize, const float minX, const float maxX, const float minZ, const float maxZ) const;
 
-    std::string           m_pfoListName;                ///< The input pfo list name to modify
+    pandora::StringVector m_pfoListNames;               ///< The input pfo list names to modify
     std::string           m_vertexListName;             ///< The input list of vertices - must be of size one: the neutrino vertex
     std::string           m_clusterListNameU;           ///< The input list of clusters in the U view
     std::string           m_clusterListNameV;           ///< The input list of clusters in the V view
     std::string           m_clusterListNameW;           ///< The input list of clusters in the W view
-    std::string           m_clusterListName3D;          ///< The input list of 3D clusters
+    std::string           m_trackClusterListName;       ///< The input list of 3D track clusters
+    std::string           m_showerClusterListName;      ///< The input list of 3D shower clusters
     float                 m_isolatedHitDistance;        ///< The separation distance from all other hits for to be considered isolated
     float                 m_stitchingThreshold;         ///< The threshold distance within which two segments of hits should be stitched
     float                 m_transverseBias;             ///< The amount by which we bias the transverse coordinate over the longitudinal when finding the nearest neighbor

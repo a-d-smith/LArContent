@@ -156,19 +156,12 @@ void NeutrinoHierarchyAlgorithm::GetCandidateDaughterPfoList(PfoList &candidateD
 
         if (STATUS_CODE_SUCCESS == PandoraContentApi::GetList(*this, daughterPfoListName, pCandidatePfoList))
         {
-            std::cout << "Collecting PFOs in list: " << daughterPfoListName << ". Found, " << pCandidatePfoList->size() << std::endl;  //// DEBUG
             candidateDaughterPfoList.insert(candidateDaughterPfoList.end(), pCandidatePfoList->begin(), pCandidatePfoList->end());
         }
         else if (PandoraContentApi::GetSettings(*this)->ShouldDisplayAlgorithmInfo())
         {
             std::cout << "NeutrinoHierarchyAlgorithm: unable to find pfo list " << daughterPfoListName << std::endl;
         }
-        //// BEGIN DEBUG
-        else
-        {
-            std::cout << "NeutrinoHierarchyAlgorithm: unable to find pfo list " << daughterPfoListName << std::endl;
-        }
-        //// END DEBUG
     }
 
     if (candidateDaughterPfoList.empty())
