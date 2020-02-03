@@ -230,6 +230,7 @@ private:
     bool MakeThreeViewMatch(pandora::CaloHitList &hitsU, pandora::CaloHitList &hitsV, pandora::CaloHitList &hitsW, std::vector<SplitPoint3D> &splitPoints3D) const;
     bool MakeTwoViewMatch(const pandora::CaloHitList &allHitsU, const pandora::CaloHitList &allHitsV, const pandora::CaloHitList &allHitsW, pandora::CaloHitList &hitsU, pandora::CaloHitList &hitsV, pandora::CaloHitList &hitsW, std::vector<SplitPoint3D> &splitPoints3D) const;
     void GetViableTwoViewMatches(const pandora::CaloHitList &hitsA, const pandora::CaloHitList &hitsB, const pandora::CaloHitList &hitsC, std::vector<SplitPoint3D> &splitPointsAB) const;
+    void Filter3DSplitPoints(const ViewToHitsMap &viewToAllHitsMap, const ViewToHitHierarchyMap &viewToHitHierarchyMap, const std::vector<SplitPoint3D> &splitPoints3D, std::vector<SplitPoint3D> &filteredSplitPoints3D) const;
     SplitPoint3D Select3DSplitPoint(const std::vector<SplitPoint3D> &splitPoints3D, const ViewToHitsMap &viewToAllHitsMap, const ViewToHitHierarchyMap &viewToHitHierarchyMap) const;
     float GetSplitPointScore(const SplitPoint3D &splitPoint, const ViewToHitsMap &viewToAllHitsMap, const ViewToHitHierarchyMap &viewToHitHierarchyMap) const;
     void SplitHitListAtPoint(const pandora::HitType view, const pandora::CaloHitList &caloHits, const CaloHitHierarchyMap &hitHierarchyMap, const SplitPoint3D &chosenSplitPoint, pandora::CaloHitList &upstreamHitsMap, pandora::CaloHitList &downstreamHitsMap) const;
@@ -249,11 +250,12 @@ private:
     float                 m_isolatedHitDistance;        ///< The separation distance from all other hits for to be considered isolated
     float                 m_stitchingThreshold;         ///< The threshold distance within which two segments of hits should be stitched
     float                 m_transverseBias;             ///< The amount by which we bias the transverse coordinate over the longitudinal when finding the nearest neighbor
-    int                   m_nSampleHits;                ///< The number of hits to sample either side of a given hit to find a kink
+    unsigned int          m_nSampleHits;                ///< The number of hits to sample either side of a given hit to find a kink
     float                 m_cosAngleThreshold;          ///< The cosine angle below which we identify a kink
     float                 m_maxMatchDeltaX;             ///< The maxiumum delta X between kink positions to be considered a match between views
     float                 m_maxMatch3ViewChi2;          ///< The maximum chi2 for kinks from three views to be considered a match
     float                 m_twoViewProjectionThreshold; ///< The threshold distance for a 2-view match when we project the 3D position into the remaining view
+    float                 m_cos3DAngleThreshold;        ///< The cosine angle below which we identify a kink in 3D
 };
 
 } // namespace lar_content

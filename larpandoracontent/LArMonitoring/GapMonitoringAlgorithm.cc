@@ -37,8 +37,8 @@ StatusCode GapMonitoringAlgorithm::Run()
     float minY, maxY, minZ, maxZ;
     this->GetTotalYZExtent(minY, maxY, minZ, maxZ);
 
-    const auto nSamplesY = static_cast<int>(std::ceil((maxY - minY) / ySampleWidth));
-    const auto nSamplesZ = static_cast<int>(std::ceil((maxZ - minZ) / zSampleWidth));
+    const auto nSamplesY = static_cast<unsigned int>(std::ceil((maxY - minY) / ySampleWidth));
+    const auto nSamplesZ = static_cast<unsigned int>(std::ceil((maxZ - minZ) / zSampleWidth));
     const auto nSamplesTot = nSamplesY * nSamplesZ;
 
     unsigned int nInGapU = 0;

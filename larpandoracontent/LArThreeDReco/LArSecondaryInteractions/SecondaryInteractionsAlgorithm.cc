@@ -30,7 +30,8 @@ SecondaryInteractionsAlgorithm::SecondaryInteractionsAlgorithm() :
     m_cosAngleThreshold(0.9),
     m_maxMatchDeltaX(0.6f),
     m_maxMatch3ViewChi2(1.f),
-    m_twoViewProjectionThreshold(1.8f)
+    m_twoViewProjectionThreshold(1.8f),
+    m_cos3DAngleThreshold(0.995)
 {
 }
 
@@ -316,14 +317,21 @@ void SecondaryInteractionsAlgorithm::SplitPfo(const ParticleFlowObject *const pP
         this->GetSplitHits(selectedSegments, separationMap, splitHits);
     }
 
+    // Add the 3D hits the map
+    auto &hits3D = viewToCaloHitsMap[TPC_3D];
+    LArPfoHelper::GetCaloHits(pPfo, TPC_3D, hits3D);
+
     // Match the 2D split hits between views to find viable a 3D split position
     std::vector<SplitPoint3D> splitPoints3D;
     this->Get3DSplitPoints(viewToCaloHitsMap, viewToSplitHitsMap, splitPoints3D);
+    
+    std::vector<SplitPoint3D> filteredSplitPoints3D;
+    this->Filter3DSplitPoints(viewToCaloHitsMap, viewToHitHierarchyMap, splitPoints3D, filteredSplitPoints3D);
 
-    if (splitPoints3D.empty())
+    if (filteredSplitPoints3D.empty())
         return;
 
-    const auto chosenSplitPoint = this->Select3DSplitPoint(splitPoints3D, viewToCaloHitsMap, viewToHitHierarchyMap);
+    const auto chosenSplitPoint = this->Select3DSplitPoint(filteredSplitPoints3D, viewToCaloHitsMap, viewToHitHierarchyMap);
     
     //// BEGIN DEBUG
     /*
@@ -345,11 +353,6 @@ void SecondaryInteractionsAlgorithm::SplitPfo(const ParticleFlowObject *const pP
     PANDORA_MONITORING_API(ViewEvent(this->GetPandora()));
     */
     //// END DEBUG
-
-
-    // Add the 3D hits the map
-    auto &hits3D = viewToCaloHitsMap[TPC_3D];
-    LArPfoHelper::GetCaloHits(pPfo, TPC_3D, hits3D);
 
     // Split the hits in each view upstream and downstream of the split position using the hierarchy
     ViewToHitsMap viewToUpstreamHitsMap, viewToDownstreamHitsMap;
@@ -1089,6 +1092,48 @@ void SecondaryInteractionsAlgorithm::Get3DSplitPoints(const ViewToHitsMap &viewT
 }
 
 // -----------------------------------------------------------------------------------------------------------------------------------------
+
+void SecondaryInteractionsAlgorithm::Filter3DSplitPoints(const ViewToHitsMap &viewToAllHitsMap, const ViewToHitHierarchyMap &viewToHitHierarchyMap, const std::vector<SplitPoint3D> &splitPoints3D, std::vector<SplitPoint3D> &filteredSplitPoints3D) const
+{
+    for (const auto &splitPoint : splitPoints3D)
+    {
+        ViewToHitsMap viewToUpstreamHitsMap, viewToDownstreamHitsMap;
+        this->SplitPfoHits(viewToAllHitsMap, viewToHitHierarchyMap, splitPoint, viewToUpstreamHitsMap, viewToDownstreamHitsMap);
+
+        // Get the upstream hits
+        const auto upstream3DHits = viewToUpstreamHitsMap.at(TPC_3D);
+        CartesianPointVector upstreamPoints;
+        for (const auto &p3DHit : upstream3DHits)
+            upstreamPoints.push_back(p3DHit->GetPositionVector());
+        
+        // Get the downstream hits
+        const auto downstream3DHits = viewToDownstreamHitsMap.at(TPC_3D);
+        CartesianPointVector downstreamPoints;
+        for (const auto &p3DHit : downstream3DHits)
+            downstreamPoints.push_back(p3DHit->GetPositionVector());
+
+        // Fit the hits upstream and downstream
+        LArTrackStateVector trackStateVectorUpstream;
+        LArPfoHelper::GetSlidingFitTrajectory(upstreamPoints, splitPoint.m_position3D, 20, LArGeometryHelper::GetWirePitch(this->GetPandora(), TPC_VIEW_W), trackStateVectorUpstream);
+        
+        LArTrackStateVector trackStateVectorDownstream;
+        LArPfoHelper::GetSlidingFitTrajectory(downstreamPoints, splitPoint.m_position3D, 20, LArGeometryHelper::GetWirePitch(this->GetPandora(), TPC_VIEW_W), trackStateVectorDownstream);
+
+        const auto upstreamDir = trackStateVectorUpstream.front().GetDirection();
+        const auto downstreamDir = trackStateVectorDownstream.front().GetDirection();
+        
+        std::cout << "Upstream:   " << trackStateVectorUpstream.size() << ". " << upstreamDir << std::endl;
+        std::cout << "Downstream: " << trackStateVectorDownstream.size() << ". " << downstreamDir << std::endl;
+
+        const auto cosTheta = upstreamDir.GetDotProduct(downstreamDir * (-1));
+        std::cout << "CosTheta:   " << cosTheta << std::endl;
+
+        if (cosTheta < m_cos3DAngleThreshold)
+            filteredSplitPoints3D.push_back(splitPoint);
+    }
+}
+
+// -----------------------------------------------------------------------------------------------------------------------------------------
     
 SecondaryInteractionsAlgorithm::SplitPoint3D SecondaryInteractionsAlgorithm::Select3DSplitPoint(const std::vector<SplitPoint3D> &splitPoints3D, const ViewToHitsMap &viewToAllHitsMap, const ViewToHitHierarchyMap &viewToHitHierarchyMap) const
 {
@@ -1802,6 +1847,7 @@ StatusCode SecondaryInteractionsAlgorithm::ReadSettings(const TiXmlHandle xmlHan
     PANDORA_RETURN_RESULT_IF_AND_IF(STATUS_CODE_NOT_FOUND, STATUS_CODE_SUCCESS, !=, XmlHelper::ReadValue(xmlHandle, "TransverseBias", m_transverseBias));
     PANDORA_RETURN_RESULT_IF_AND_IF(STATUS_CODE_NOT_FOUND, STATUS_CODE_SUCCESS, !=, XmlHelper::ReadValue(xmlHandle, "NumberOfSampleHits", m_nSampleHits));
     PANDORA_RETURN_RESULT_IF_AND_IF(STATUS_CODE_NOT_FOUND, STATUS_CODE_SUCCESS, !=, XmlHelper::ReadValue(xmlHandle, "CosAngleThreshold", m_cosAngleThreshold));
+    PANDORA_RETURN_RESULT_IF_AND_IF(STATUS_CODE_NOT_FOUND, STATUS_CODE_SUCCESS, !=, XmlHelper::ReadValue(xmlHandle, "Cos3DAngleThreshold", m_cos3DAngleThreshold));
     PANDORA_RETURN_RESULT_IF_AND_IF(STATUS_CODE_NOT_FOUND, STATUS_CODE_SUCCESS, !=, XmlHelper::ReadValue(xmlHandle, "MaxMatchDeltaX", m_maxMatchDeltaX));
     PANDORA_RETURN_RESULT_IF_AND_IF(STATUS_CODE_NOT_FOUND, STATUS_CODE_SUCCESS, !=, XmlHelper::ReadValue(xmlHandle, "MaxMatchThreeViewChi2", m_maxMatch3ViewChi2));
     PANDORA_RETURN_RESULT_IF_AND_IF(STATUS_CODE_NOT_FOUND, STATUS_CODE_SUCCESS, !=, XmlHelper::ReadValue(xmlHandle, "TwoViewProjectionThreshold", m_twoViewProjectionThreshold));
