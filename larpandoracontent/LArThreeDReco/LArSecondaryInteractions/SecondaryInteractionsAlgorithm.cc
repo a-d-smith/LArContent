@@ -27,6 +27,8 @@ SecondaryInteractionsAlgorithm::SecondaryInteractionsAlgorithm() :
     m_stitchingThreshold(1.f),
     m_transverseBias(2.f),
     m_nSampleHits(5),
+    m_cos3DAngleToWireThreshold(0.95),
+    m_minHitsThreshold(15),
     m_cosAngleThreshold(0.9),
     m_maxMatchDeltaX(0.6f),
     m_maxMatch3ViewChi2(1.f),
@@ -88,176 +90,20 @@ StatusCode SecondaryInteractionsAlgorithm::Run()
 
 void SecondaryInteractionsAlgorithm::GetSeedVertices(const PfoList &allPfos, const CartesianVector &vertexPos, PfoToCartesianVectorMap &pfoToSeedPointMap) const
 {
+    // ATTN this is a place where we can seed the hit hierarchies on a PFO-by-PFO basis using the context of the whole event
+    // for now all hierarchies are seeded at the vertex
     for (const auto &pPfo : allPfos)
         pfoToSeedPointMap.emplace(pPfo, vertexPos);
-
-    // TODO make this less vomit in code form
-    /*    
-    const auto wirePitch = LArGeometryHelper::GetWirePitch(this->GetPandora(), TPC_VIEW_W);
-    const unsigned int fitWindow = 5;
-    const auto dummy = std::numeric_limits<float>::max();
-
-    // Cache the distances between all Pfos and the vertex
-    std::map<const ParticleFlowObject *const, std::map<const ParticleFlowObject *const, float> > pfoSeparationMap;
-    std::map<const ParticleFlowObject *const, std::map<const ParticleFlowObject *const, const CartesianVector*> > pfoMatchPointMap;
-    std::map<const ParticleFlowObject *const, float> pfoVertexDistMap;
-
-    // Loop over the PFOs
-    auto iterI = allPfos.begin();
-    for (unsigned int i = 0; i < allPfos.size(); ++i)
-    {
-        const auto pPfoI = *iterI;
-
-        // Initialise the map entries
-        pfoSeparationMap[pPfoI];
-        pfoMatchPointMap[pPfoI];
-        pfoVertexDistMap[pPfoI] = std::numeric_limits<float>::max();
-        
-        // Get the endpoints
-        CartesianVector minPosI(dummy, dummy, dummy);
-        CartesianVector maxPosI(dummy, dummy, dummy);
-
-        try
-        {
-            ClusterList clusters3DI;
-            LArPfoHelper::GetThreeDClusterList(pPfoI, clusters3DI);
-
-            const ThreeDSlidingFitResult slidingFitResultI(clusters3DI.front(), fitWindow, wirePitch);
-            minPosI = slidingFitResultI.GetGlobalMinLayerPosition();
-            maxPosI = slidingFitResultI.GetGlobalMaxLayerPosition();
-        }
-        catch (const StatusCodeException &)
-        {
-            // If we can't fit then just skip this pfo
-            continue;
-        }
-
-        // Get the distance to the vertex
-        pfoVertexDistMap[pPfoI] = std::min(vertexPos.GetDistanceSquared(minPosI), vertexPos.GetDistanceSquared(maxPosI));
-
-        // Now loop over the other PFOs without double counting any pairs
-        auto iterJ = allPfos.begin();
-        for (unsigned int j = 0; j < i; ++j)
-        {
-            const auto pPfoJ = *iterJ;
-        
-            // Get the endpoints
-            CartesianVector minPosJ(dummy, dummy, dummy);
-            CartesianVector maxPosJ(dummy, dummy, dummy);
-
-            try
-            {
-                ClusterList clusters3DJ;
-                LArPfoHelper::GetThreeDClusterList(pPfoJ, clusters3DJ);
-
-                const ThreeDSlidingFitResult slidingFitResultJ(clusters3DJ.front(), fitWindow, wirePitch);
-                minPosJ = slidingFitResultJ.GetGlobalMinLayerPosition();
-                maxPosJ = slidingFitResultJ.GetGlobalMaxLayerPosition();
-            }
-            catch (const StatusCodeException &)
-            {
-                // If we can't fit then just skip this pfo
-                continue;
-            }
-
-            // Get all the different endpoint distances
-            float minDist = std::numeric_limits<float>::max();
-            for (const auto &posI : {minPosI, maxPosI})
-            {
-                for (const auto &posJ : {minPosJ, maxPosJ})
-                {
-                    const auto dist = posI.GetDistanceSquared(posJ);
-                    
-                    if (dist > minDist)
-                        continue;
-
-                    minDist = dist;
-                    pfoSeparationMap[pPfoI][pPfoJ] = minDist;
-                    pfoSeparationMap[pPfoJ][pPfoI] = minDist;
-
-                    const auto pMatchPoint = new CartesianVector((posI + posJ) * 0.5);
-                    const auto pMatchPointCopy = new CartesianVector(*pMatchPoint);
-                    pfoMatchPointMap[pPfoI][pPfoJ] = pMatchPoint;
-                    pfoMatchPointMap[pPfoJ][pPfoI] = pMatchPointCopy;
-                }
-            }
-
-            std::advance(iterJ, 1);
-        }
-
-        std::advance(iterI, 1);
-    }
-
-    // Arrange the PFOs into a crude hierarchy
-    auto remainingPfos = allPfos;
-    PfoList usedPfos;
-
-    while (!remainingPfos.empty())
-    {
-        const ParticleFlowObject *pBestChild = nullptr;
-        CartesianVector bestMatchPoint(dummy, dummy, dummy);
-        
-        float minDist = std::numeric_limits<float>::max();
-
-        for (const auto &pPfo : remainingPfos)
-        {
-            const auto vertexDist = pfoVertexDistMap.at(pPfo);
-            const auto separationMap = pfoSeparationMap.at(pPfo);
-            const auto matchPointMap = pfoMatchPointMap.at(pPfo);
-
-            if (vertexDist <= minDist)
-            {
-                minDist = vertexDist;
-                pBestChild = pPfo;
-                bestMatchPoint = vertexPos;
-            }
-
-            for (const auto &pUsedPfo : usedPfos)
-            {
-                if (separationMap.find(pUsedPfo) == separationMap.end())
-                    continue;
-
-                const auto dist = separationMap.at(pUsedPfo);
-                if (dist <= minDist)
-                {
-                    minDist = dist;
-                    pBestChild = pPfo;
-                    bestMatchPoint = *matchPointMap.at(pUsedPfo);
-                }
-            }
-        }
-
-        // Make the match
-        remainingPfos.remove(pBestChild);
-        usedPfos.push_back(pBestChild);
-        pfoToSeedPointMap.emplace(pBestChild, bestMatchPoint);
-    }
-    
-    // Clean up the mess you just made
-    for (auto &entry : pfoMatchPointMap)
-    {
-        for (const auto &entry2 : entry.second)
-        {
-            delete entry2.second;
-        }
-
-        entry.second.clear();
-    }
-    */
 }
 
 // -----------------------------------------------------------------------------------------------------------------------------------------
 
-void SecondaryInteractionsAlgorithm::SplitPfo(const ParticleFlowObject *const pPfo, const CartesianVector &vertexPos, PfoList &pfosToSave, PfoList &pfosToDelete) const
+bool SecondaryInteractionsAlgorithm::GetTrackDirection(const ParticleFlowObject *const pPfo, CartesianVector &trackDir) const
 {
-    std::cout << "Checking if I should split PFO: " << pPfo << std::endl;
-
-    //// BEGIN TEST
     CaloHitList threeDHits;
     LArPfoHelper::GetCaloHits(pPfo, TPC_3D, threeDHits);
     const auto has3DHits = !threeDHits.empty();
 
-    CartesianVector trackDir(0.f, 0.f, 0.f);
     if (has3DHits)
     {
         CartesianVector centroid(0.f, 0.f, 0.f);
@@ -267,9 +113,46 @@ void SecondaryInteractionsAlgorithm::SplitPfo(const ParticleFlowObject *const pP
         trackDir = eigenvectors.front();
     }
 
-    if (!has3DHits)
+    return has3DHits;
+}
+
+// -----------------------------------------------------------------------------------------------------------------------------------------
+
+float SecondaryInteractionsAlgorithm::GetCosAngleToWire(const CartesianVector &trackDir, const HitType &view) const
+{
+    const auto wireDir = CartesianVector(1.f, 0.f, 0.f).GetCrossProduct(LArGeometryHelper::GetWireAxis(this->GetPandora(), view));
+    return std::abs(trackDir.GetDotProduct(wireDir));
+}
+
+// -----------------------------------------------------------------------------------------------------------------------------------------
+
+std::vector<CaloHitList> SecondaryInteractionsAlgorithm::FilterSegments(const CartesianVector &trackDir, const HitType &view, const std::vector<CaloHitList> &segments) const
+{
+    std::vector<CaloHitList> filteredSegments;
+    const auto trackWireCosTheta = this->GetCosAngleToWire(trackDir, view);
+
+    if (trackWireCosTheta > m_cos3DAngleToWireThreshold)
+        return filteredSegments;
+
+    for (const auto &segment : segments)
+    {
+        if (segment.size() < m_minHitsThreshold)
+            continue;
+
+        filteredSegments.push_back(segment);
+    }
+
+    return filteredSegments;
+}
+
+// -----------------------------------------------------------------------------------------------------------------------------------------
+
+void SecondaryInteractionsAlgorithm::SplitPfo(const ParticleFlowObject *const pPfo, const CartesianVector &vertexPos, PfoList &pfosToSave, PfoList &pfosToDelete) const
+{
+    // Get the track direction
+    CartesianVector trackDir(0.f, 0.f, 0.f);
+    if (!this->GetTrackDirection(pPfo, trackDir))
         return;
-    //// END TEST
 
     // Identify viable hits that lie on viable 2D split positions and get the hierarchy of hits
     ViewToHitHierarchyMap viewToHitHierarchyMap;
@@ -290,30 +173,8 @@ void SecondaryInteractionsAlgorithm::SplitPfo(const ParticleFlowObject *const pP
         auto &hitHierarchy = viewToHitHierarchyMap[view];
         this->BuildHitHierarchy(vertexPos, segments, hitHierarchy);
 
-        //// TEST
-        // Filter the segments before finding kinks
-        const auto wireDir = CartesianVector(1.f, 0.f, 0.f).GetCrossProduct(LArGeometryHelper::GetWireAxis(this->GetPandora(), view));
-        const auto trackWireCosTheta = std::abs(trackDir.GetDotProduct(wireDir));
-        
-        if (trackWireCosTheta > 0.95)
-            continue;
-
-        std::vector<CaloHitList> selectedSegments;
-        for (const auto &segment : segments)
-        {
-            if (segment.size() < 15)
-                continue;
-       
-            /*
-            const auto dimension = this->GetDimension(segment);
-            std::cout << "      - Dimension: " << dimension << std::endl;
-            */
-
-            selectedSegments.push_back(segment);
-        }
-        //// END TEST
-
         // Get the hits that sit at a kink or bifurcation position
+        const auto selectedSegments = this->FilterSegments(trackDir, view, segments);
         this->GetSplitHits(selectedSegments, separationMap, splitHits);
     }
 
@@ -1846,6 +1707,8 @@ StatusCode SecondaryInteractionsAlgorithm::ReadSettings(const TiXmlHandle xmlHan
     PANDORA_RETURN_RESULT_IF_AND_IF(STATUS_CODE_NOT_FOUND, STATUS_CODE_SUCCESS, !=, XmlHelper::ReadValue(xmlHandle, "StitchingThresholdDistance", m_stitchingThreshold));
     PANDORA_RETURN_RESULT_IF_AND_IF(STATUS_CODE_NOT_FOUND, STATUS_CODE_SUCCESS, !=, XmlHelper::ReadValue(xmlHandle, "TransverseBias", m_transverseBias));
     PANDORA_RETURN_RESULT_IF_AND_IF(STATUS_CODE_NOT_FOUND, STATUS_CODE_SUCCESS, !=, XmlHelper::ReadValue(xmlHandle, "NumberOfSampleHits", m_nSampleHits));
+    PANDORA_RETURN_RESULT_IF_AND_IF(STATUS_CODE_NOT_FOUND, STATUS_CODE_SUCCESS, !=, XmlHelper::ReadValue(xmlHandle, "Cos3DAngleToWireThreshold", m_cos3DAngleToWireThreshold));
+    PANDORA_RETURN_RESULT_IF_AND_IF(STATUS_CODE_NOT_FOUND, STATUS_CODE_SUCCESS, !=, XmlHelper::ReadValue(xmlHandle, "MinHitsThreshold", m_minHitsThreshold));
     PANDORA_RETURN_RESULT_IF_AND_IF(STATUS_CODE_NOT_FOUND, STATUS_CODE_SUCCESS, !=, XmlHelper::ReadValue(xmlHandle, "CosAngleThreshold", m_cosAngleThreshold));
     PANDORA_RETURN_RESULT_IF_AND_IF(STATUS_CODE_NOT_FOUND, STATUS_CODE_SUCCESS, !=, XmlHelper::ReadValue(xmlHandle, "Cos3DAngleThreshold", m_cos3DAngleThreshold));
     PANDORA_RETURN_RESULT_IF_AND_IF(STATUS_CODE_NOT_FOUND, STATUS_CODE_SUCCESS, !=, XmlHelper::ReadValue(xmlHandle, "MaxMatchDeltaX", m_maxMatchDeltaX));

@@ -215,6 +215,9 @@ private:
 
 
     // TODO doxygen comments
+    bool GetTrackDirection(const pandora::ParticleFlowObject *const pPfo, pandora::CartesianVector &trackDir) const;
+    float GetCosAngleToWire(const pandora::CartesianVector &trackDir, const pandora::HitType &view) const;
+    std::vector<pandora::CaloHitList> FilterSegments(const pandora::CartesianVector &trackDir, const pandora::HitType &view, const std::vector<pandora::CaloHitList> &segments) const;
     void BuildInitialHitHierarchy(const pandora::CaloHitList &segment, const pandora::CaloHit *const pSeedHit, CaloHitHierarchyMap &hitHierarchy) const;
     void MakeBestHierarchyLink(const HitSeparationMap &separationMap, std::vector<pandora::CaloHitList> &orphanSegments, CaloHitHierarchyMap &hitHierarchy) const;
     void AddSegmentToHitHierarchy(const unsigned int nearestSegmentIndex, const bool matchFront, const pandora::CaloHit *const pNearestHit, std::vector<pandora::CaloHitList> &orphanSegments, CaloHitHierarchyMap &hitHierarchy) const;
@@ -251,6 +254,8 @@ private:
     float                 m_stitchingThreshold;         ///< The threshold distance within which two segments of hits should be stitched
     float                 m_transverseBias;             ///< The amount by which we bias the transverse coordinate over the longitudinal when finding the nearest neighbor
     unsigned int          m_nSampleHits;                ///< The number of hits to sample either side of a given hit to find a kink
+    float                 m_cos3DAngleToWireThreshold;  ///< The angular threshold to between a PFO and a wire for a segment to be used in the kink finding
+    unsigned int          m_minHitsThreshold;           ///< The minimum number of hits in a segment to be used in the kink finding
     float                 m_cosAngleThreshold;          ///< The cosine angle below which we identify a kink
     float                 m_maxMatchDeltaX;             ///< The maxiumum delta X between kink positions to be considered a match between views
     float                 m_maxMatch3ViewChi2;          ///< The maximum chi2 for kinks from three views to be considered a match
