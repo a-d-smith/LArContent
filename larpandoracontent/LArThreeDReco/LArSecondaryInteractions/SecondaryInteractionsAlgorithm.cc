@@ -33,7 +33,8 @@ SecondaryInteractionsAlgorithm::SecondaryInteractionsAlgorithm() :
     m_maxMatchDeltaX(0.6f),
     m_maxMatch3ViewChi2(1.f),
     m_twoViewProjectionThreshold(1.8f),
-    m_cos3DAngleThreshold(0.995)
+    m_cos3DAngleThreshold(0.995f),
+    m_minVertexDist(5.f)
 {
 }
 
@@ -51,11 +52,17 @@ StatusCode SecondaryInteractionsAlgorithm::Run()
     PfoToCartesianVectorMap pfoToSeedPointMap;
     this->GetSeedVertices(allPfos, vertexPos, pfoToSeedPointMap);
 
+//    std::cout << "DEBUG - Got the inputs, nPfos: " << allPfos.size() << std::endl;
     for (const auto &pfoListName : m_pfoListNames)
     {
+//        std::cout << "DEBUG - Processing list: " << pfoListName << std::endl;
+
         // Get the input pfos in this list
         PfoList inputPfos;
         this->CollectInputPfos(inputPfos, pfoListName);
+        
+//        std::cout << "DEBUG - nPfos in list: " << inputPfos.size() << std::endl;
+//        std::cout << "DEBUG - Setting up new PFO list" << std::endl;
 
         // Make a temporary PFO list to work within
         std::string newPfoListName;
@@ -64,15 +71,28 @@ StatusCode SecondaryInteractionsAlgorithm::Run()
 
         // Where desired, make new PFOs in the current list that represent existing PFOs before and after a split
         PfoList pfosToSave, pfosToDelete;
+//        std::cout << "DEBUG - Processing PFOs" << std::endl;
         for (const auto &pPfo : inputPfos)
         {
+//            std::cout << "DEBUG - Processing PFO: " << pPfo << std::endl;
+
             const auto seedPoint = pfoToSeedPointMap.at(pPfo);
+            
+//            std::cout << "DEBUG - Seed point: " << seedPoint << std::endl;
+//            std::cout << "DEBUG - Checking if I should split" << std::endl;
+
             this->SplitPfo(pPfo, seedPoint, pfosToSave, pfosToDelete);
+            
+//            std::cout << "DEBUG - Finished processing PFO: " << pPfo << std::endl;
         }
+            
+//        std::cout << "DEBUG - Saving " << pfosToSave.size() << " PFOs" << std::endl;
 
         // Save any new PFOs to the input list
         if (!pfosToSave.empty())
             PANDORA_RETURN_RESULT_IF(STATUS_CODE_SUCCESS, !=, PandoraContentApi::SaveList(*this, pfoListName, pfosToSave));
+        
+//        std::cout << "DEBUG - Deleting " << pfosToDelete.size() << " PFOs" << std::endl;
 
         // Delete any old PFOs that we have split
         if (pfosToDelete.empty())
@@ -80,7 +100,10 @@ StatusCode SecondaryInteractionsAlgorithm::Run()
 
         PANDORA_RETURN_RESULT_IF(STATUS_CODE_SUCCESS, !=, PandoraContentApi::ReplaceCurrentList<Pfo>(*this, pfoListName));
         for (const auto &pPfo : pfosToDelete)
+        {
+//            std::cout << "DEBUG - Deleting PFO: " << pPfo << std::endl;
             PANDORA_RETURN_RESULT_IF(STATUS_CODE_SUCCESS, !=, PandoraContentApi::Delete(*this, pPfo));
+        }
     }
 
     return STATUS_CODE_SUCCESS;
@@ -149,94 +172,97 @@ std::vector<CaloHitList> SecondaryInteractionsAlgorithm::FilterSegments(const Ca
 
 void SecondaryInteractionsAlgorithm::SplitPfo(const ParticleFlowObject *const pPfo, const CartesianVector &vertexPos, PfoList &pfosToSave, PfoList &pfosToDelete) const
 {
+//    std::cout << "DEBUG ---- Getting track direction" << std::endl;
+
     // Get the track direction
     CartesianVector trackDir(0.f, 0.f, 0.f);
     if (!this->GetTrackDirection(pPfo, trackDir))
         return;
+    
+//    std::cout << "DEBUG ---- Track dir: " << trackDir << std::endl;
 
     // Identify viable hits that lie on viable 2D split positions and get the hierarchy of hits
     ViewToHitHierarchyMap viewToHitHierarchyMap;
     ViewToHitsMap viewToCaloHitsMap, viewToSplitHitsMap;
     for (const auto &view : {TPC_VIEW_U, TPC_VIEW_V, TPC_VIEW_W})
     {
-        auto &splitHits = viewToSplitHitsMap[view];
+//        std::cout << "DEBUG ---- Dealing with view: " << view << std::endl;
 
         auto &caloHits = viewToCaloHitsMap[view];
         LArPfoHelper::GetCaloHits(pPfo, view, caloHits);
+        
+//        std::cout << "DEBUG ---- nHits: " << caloHits.size() << std::endl;
 
+//        std::cout << "DEBUG ---- Getting separation map" << std::endl;
         HitSeparationMap separationMap;
         this->GetHitSeparationMap(caloHits, separationMap);
 
+//        std::cout << "DEBUG ---- Getting segments" << std::endl;
         std::vector<CaloHitList> segments;
         this->GetContinuousSegments(vertexPos, caloHits, separationMap, segments);
+        
+//        std::cout << "DEBUG ---- nSegments: " << segments.size() << std::endl;
+//        std::cout << "DEBUG ---- Getting hit hierarchy" << std::endl;
 
         auto &hitHierarchy = viewToHitHierarchyMap[view];
         this->BuildHitHierarchy(vertexPos, segments, hitHierarchy);
+        
+//        std::cout << "DEBUG ---- Filtering segments" << std::endl;
+
+        // Select the segments with which we should try to find kinks
+        const auto selectedSegments = this->FilterSegments(trackDir, view, segments);
+        
+//        std::cout << "DEBUG ---- nFilteredSegments: " << selectedSegments.size() << std::endl;
+//        std::cout << "DEBUG ---- Getting 2D split hits" << std::endl;
 
         // Get the hits that sit at a kink or bifurcation position
-        const auto selectedSegments = this->FilterSegments(trackDir, view, segments);
+        auto &splitHits = viewToSplitHitsMap[view];
         this->GetSplitHits(selectedSegments, separationMap, splitHits);
+        
+//        std::cout << "DEBUG ---- n 2D split hits: " << splitHits.size() << std::endl;
     }
+
+//    std::cout << "DEBUG ---- Collecting 3D hits" << std::endl;
 
     // Add the 3D hits the map
     auto &hits3D = viewToCaloHitsMap[TPC_3D];
     LArPfoHelper::GetCaloHits(pPfo, TPC_3D, hits3D);
+    
+//    std::cout << "DEBUG ---- n 3D hits: " << hits3D.size() << std::endl;
 
     // Match the 2D split hits between views to find viable a 3D split position
+//    std::cout << "DEBUG ---- Collecting 3D split points" << std::endl;
+
     std::vector<SplitPoint3D> splitPoints3D;
     this->Get3DSplitPoints(viewToCaloHitsMap, viewToSplitHitsMap, splitPoints3D);
     
+//    std::cout << "DEBUG ---- n 3D split points: " << splitPoints3D.size() << std::endl;
+//    std::cout << "DEBUG ---- Filtering split points" << std::endl;
+
+    // Select the 3D split points that should be considered
     std::vector<SplitPoint3D> filteredSplitPoints3D;
-    this->Filter3DSplitPoints(viewToCaloHitsMap, viewToHitHierarchyMap, splitPoints3D, filteredSplitPoints3D);
+    this->Filter3DSplitPoints(vertexPos, viewToCaloHitsMap, viewToHitHierarchyMap, splitPoints3D, filteredSplitPoints3D);
+    
+//    std::cout << "DEBUG ---- n 3D split points after filter: " << filteredSplitPoints3D.size() << std::endl;
 
     if (filteredSplitPoints3D.empty())
         return;
 
-    const auto chosenSplitPoint = this->Select3DSplitPoint(filteredSplitPoints3D, viewToCaloHitsMap, viewToHitHierarchyMap);
-    
-    //// BEGIN DEBUG
-    /*
-    for (const auto &view : {TPC_VIEW_U, TPC_VIEW_V, TPC_VIEW_W})
-    {
-        const auto hits = viewToCaloHitsMap.at(view);
-        PANDORA_MONITORING_API(VisualizeCaloHits(this->GetPandora(), &hits, "Hits", RED));
-    }
+//    std::cout << "DEBUG ---- Splitting PFO hits" << std::endl;
 
-    const auto point3D = chosenSplitPoint.m_position3D;
-    const auto pointU = LArGeometryHelper::ProjectPosition(this->GetPandora(), point3D, TPC_VIEW_U);
-    const auto pointV = LArGeometryHelper::ProjectPosition(this->GetPandora(), point3D, TPC_VIEW_V);
-    const auto pointW = LArGeometryHelper::ProjectPosition(this->GetPandora(), point3D, TPC_VIEW_W);
-
-    PANDORA_MONITORING_API(AddMarkerToVisualization(this->GetPandora(), &pointU, "SplitU", GREEN, 3));
-    PANDORA_MONITORING_API(AddMarkerToVisualization(this->GetPandora(), &pointV, "SplitV", GREEN, 3));
-    PANDORA_MONITORING_API(AddMarkerToVisualization(this->GetPandora(), &pointW, "SplitW", GREEN, 3));
-
-    PANDORA_MONITORING_API(ViewEvent(this->GetPandora()));
-    */
-    //// END DEBUG
-
-    // Split the hits in each view upstream and downstream of the split position using the hierarchy
+    // Choose the best 3D split position, and split the hits in each view upstream and downstream of the position using the hierarchy
     ViewToHitsMap viewToUpstreamHitsMap, viewToDownstreamHitsMap;
+    const auto chosenSplitPoint = this->Select3DSplitPoint(filteredSplitPoints3D, viewToCaloHitsMap, viewToHitHierarchyMap);
     this->SplitPfoHits(viewToCaloHitsMap, viewToHitHierarchyMap, chosenSplitPoint, viewToUpstreamHitsMap, viewToDownstreamHitsMap);
 
-    //// BEGIN DEBUG
-    /*
-    for (const auto &view : {TPC_VIEW_U, TPC_VIEW_V, TPC_VIEW_W})
-    {
-        const auto upstreamHits = viewToUpstreamHitsMap.at(view);
-        const auto downstreamHits = viewToDownstreamHitsMap.at(view);
-        PANDORA_MONITORING_API(VisualizeCaloHits(this->GetPandora(), &upstreamHits, "Upstream", RED));
-        PANDORA_MONITORING_API(VisualizeCaloHits(this->GetPandora(), &downstreamHits, "Downstream", BLUE));
-    }
-    PANDORA_MONITORING_API(ViewEvent(this->GetPandora()));
-    */
-    //// END DEBUG
+//    std::cout << "DEBUG ---- Splitting PFO clusters" << std::endl;
 
     // Now make the clusters and PFOs for these upstream and downstream segments
     ClusterList upstreamClusters, downstreamClusters;
     this->SplitPfoClusters(pPfo, viewToUpstreamHitsMap, viewToDownstreamHitsMap, upstreamClusters, downstreamClusters);
+    
+//    std::cout << "DEBUG ---- Splitting PFO!!!" << std::endl;
     this->SplitPfo(pPfo, upstreamClusters, downstreamClusters, pfosToSave, pfosToDelete); 
-    std::cout << "Split made!" << std::endl;
 }
 
 // -----------------------------------------------------------------------------------------------------------------------------------------
@@ -954,40 +980,83 @@ void SecondaryInteractionsAlgorithm::Get3DSplitPoints(const ViewToHitsMap &viewT
 
 // -----------------------------------------------------------------------------------------------------------------------------------------
 
-void SecondaryInteractionsAlgorithm::Filter3DSplitPoints(const ViewToHitsMap &viewToAllHitsMap, const ViewToHitHierarchyMap &viewToHitHierarchyMap, const std::vector<SplitPoint3D> &splitPoints3D, std::vector<SplitPoint3D> &filteredSplitPoints3D) const
+void SecondaryInteractionsAlgorithm::Filter3DSplitPoints(const CartesianVector &vertexPos, const ViewToHitsMap &viewToAllHitsMap, const ViewToHitHierarchyMap &viewToHitHierarchyMap, const std::vector<SplitPoint3D> &splitPoints3D, std::vector<SplitPoint3D> &filteredSplitPoints3D) const
 {
     for (const auto &splitPoint : splitPoints3D)
     {
+//        std::cout << "DEBUG -------- Checking 3D split point" << std::endl;
+
+        if (splitPoint.m_position3D.GetDistanceSquared(vertexPos) < m_minVertexDist)
+            continue;
+        
+//        std::cout << "DEBUG -------- Passes vertex distance cut" << std::endl;
+//        std::cout << "DEBUG -------- Checking 3D hits" << std::endl;
+
+        const auto iter3DHits = viewToAllHitsMap.find(TPC_3D);
+        if (iter3DHits == viewToAllHitsMap.end())
+            throw StatusCodeException(STATUS_CODE_INVALID_PARAMETER);
+
+        const auto n3DHits = iter3DHits->second.size();
+//        std::cout << "DEBUG -------- n 3D hits: " << n3DHits << std::endl;
+        if (n3DHits == 0)
+            continue;
+
+//        std::cout << "DEBUG -------- Splitting hits at this position" << std::endl;
         ViewToHitsMap viewToUpstreamHitsMap, viewToDownstreamHitsMap;
         this->SplitPfoHits(viewToAllHitsMap, viewToHitHierarchyMap, splitPoint, viewToUpstreamHitsMap, viewToDownstreamHitsMap);
+        
+//        std::cout << "DEBUG -------- viewToUpstreamHitsMap.size(): " << viewToUpstreamHitsMap.size() << std::endl;
+//        std::cout << "DEBUG -------- viewToDownstreamHitsMap.size(): " << viewToUpstreamHitsMap.size() << std::endl;
 
         // Get the upstream hits
         const auto upstream3DHits = viewToUpstreamHitsMap.at(TPC_3D);
+//        std::cout << "DEBUG -------- nUpstreamHits 3D: " << upstream3DHits.size() << std::endl;
+
+        if (upstream3DHits.empty())
+            continue;
+
         CartesianPointVector upstreamPoints;
         for (const auto &p3DHit : upstream3DHits)
             upstreamPoints.push_back(p3DHit->GetPositionVector());
         
         // Get the downstream hits
         const auto downstream3DHits = viewToDownstreamHitsMap.at(TPC_3D);
+//        std::cout << "DEBUG -------- nDownstreamHits 3D: " << downstream3DHits.size() << std::endl;
+        
+        if (downstream3DHits.empty())
+            continue;
+
         CartesianPointVector downstreamPoints;
         for (const auto &p3DHit : downstream3DHits)
             downstreamPoints.push_back(p3DHit->GetPositionVector());
 
+//        std::cout << "DEBUG -------- Doing the sliding fit upstream" << std::endl;
+
         // Fit the hits upstream and downstream
         LArTrackStateVector trackStateVectorUpstream;
         LArPfoHelper::GetSlidingFitTrajectory(upstreamPoints, splitPoint.m_position3D, 20, LArGeometryHelper::GetWirePitch(this->GetPandora(), TPC_VIEW_W), trackStateVectorUpstream);
+       
+//        std::cout << "DEBUG -------- Upstream track state vector size: " << trackStateVectorUpstream.size() << std::endl;
+        if (trackStateVectorUpstream.empty())
+            continue;
+
+//        std::cout << "DEBUG -------- Doing the sliding fit downstream" << std::endl;
         
         LArTrackStateVector trackStateVectorDownstream;
         LArPfoHelper::GetSlidingFitTrajectory(downstreamPoints, splitPoint.m_position3D, 20, LArGeometryHelper::GetWirePitch(this->GetPandora(), TPC_VIEW_W), trackStateVectorDownstream);
 
+//        std::cout << "DEBUG -------- Downstream track state vector size: " << trackStateVectorDownstream.size() << std::endl;
+        if (trackStateVectorDownstream.empty())
+            continue;
+        
+//        std::cout << "DEBUG -------- Getting the opening angle" << std::endl;
+
+        // Get the 3D opening angle
         const auto upstreamDir = trackStateVectorUpstream.front().GetDirection();
         const auto downstreamDir = trackStateVectorDownstream.front().GetDirection();
-        
-        std::cout << "Upstream:   " << trackStateVectorUpstream.size() << ". " << upstreamDir << std::endl;
-        std::cout << "Downstream: " << trackStateVectorDownstream.size() << ". " << downstreamDir << std::endl;
-
         const auto cosTheta = upstreamDir.GetDotProduct(downstreamDir * (-1));
-        std::cout << "CosTheta:   " << cosTheta << std::endl;
+        
+//        std::cout << "DEBUG -------- cosTheta:" << cosTheta << std::endl;
 
         if (cosTheta < m_cos3DAngleThreshold)
             filteredSplitPoints3D.push_back(splitPoint);
@@ -1062,14 +1131,6 @@ bool SecondaryInteractionsAlgorithm::MakeThreeViewMatch(CaloHitList &hitsU, Calo
     if (hitsU.empty() || hitsV.empty() || hitsW.empty())
         return false;
 
-    /*
-    std::cout << "Looking for 3-view matches for split hits" << std::endl;
-    std::cout << "  - NHitsU   : " << hitsU.size() << std::endl;
-    std::cout << "  - NHitsV   : " << hitsV.size() << std::endl;
-    std::cout << "  - NHitsW   : " << hitsW.size() << std::endl;
-    std::cout << "  - NMatches : " << splitPoints3D.size() << std::endl;
-    */
-
     // Collect the viable split points
     std::vector<SplitPoint3D> viableSplitPoints;
     for (const auto &pHitU : hitsU)
@@ -1080,31 +1141,16 @@ bool SecondaryInteractionsAlgorithm::MakeThreeViewMatch(CaloHitList &hitsU, Calo
             {
                 const SplitPoint3D splitPoint(this->GetPandora(), pHitU, pHitV, pHitW);
 
-                /*
-                std::cout << "Considering triplet" << std::endl;
-                std::cout << "  - U    : " << pHitU << std::endl;
-                std::cout << "  - V    : " << pHitV << std::endl;
-                std::cout << "  - W    : " << pHitW << std::endl;
-                std::cout << "  - dX   : " << splitPoint.m_maxDeltaX << std::endl;
-                std::cout << "  - chi2 : " << splitPoint.m_chi2 << std::endl;
-                */
-
                 if (splitPoint.m_maxDeltaX > m_maxMatchDeltaX)
                     continue;
-                
-                //std::cout << "  - Passes dX cut!" << std::endl;
                 
                 if (splitPoint.m_chi2 > m_maxMatch3ViewChi2)
                     continue;
                 
-                //std::cout << "  - Passes chi2 cut!" << std::endl;
-
                 viableSplitPoints.push_back(splitPoint);
             }
         }
     }
-                
-    //std::cout << "Found " << viableSplitPoints.size() << " viable triplets" << std::endl;
 
     if (viableSplitPoints.empty())
         return false;
@@ -1124,13 +1170,6 @@ bool SecondaryInteractionsAlgorithm::MakeThreeViewMatch(CaloHitList &hitsU, Calo
 
     // Make the match
     const auto bestSplitPoint = viableSplitPoints.at(bestSplitPointIndex);
-    
-    /*
-    std::cout << "Best triplet is" << std::endl;
-    std::cout << "  - U : " << bestSplitPoint.GetHitWithView(TPC_VIEW_U) << std::endl;
-    std::cout << "  - V : " << bestSplitPoint.GetHitWithView(TPC_VIEW_V) << std::endl;
-    std::cout << "  - W : " << bestSplitPoint.GetHitWithView(TPC_VIEW_W) << std::endl;
-    */
 
     splitPoints3D.push_back(bestSplitPoint);
     hitsU.remove(bestSplitPoint.GetHitWithView(TPC_VIEW_U));
@@ -1153,8 +1192,6 @@ bool SecondaryInteractionsAlgorithm::MakeTwoViewMatch(const CaloHitList &allHits
     this->GetViableTwoViewMatches(hitsU, hitsW, allHitsV, viableSplitPoints);
     this->GetViableTwoViewMatches(hitsV, hitsW, allHitsU, viableSplitPoints);
     
-    //std::cout << "Found " << viableSplitPoints.size() << " viable doublets" << std::endl;
-
     if (viableSplitPoints.empty())
         return false;
 
@@ -1173,12 +1210,6 @@ bool SecondaryInteractionsAlgorithm::MakeTwoViewMatch(const CaloHitList &allHits
 
     // Make the match
     const auto bestSplitPoint = viableSplitPoints.at(bestSplitPointIndex);
-    
-    /*
-    std::cout << "Best doublet is" << std::endl;
-    std::cout << "  - A : " << bestSplitPoint.m_pHitA << std::endl;
-    std::cout << "  - B : " << bestSplitPoint.m_pHitB << std::endl;
-    */
 
     splitPoints3D.push_back(bestSplitPoint);
 
@@ -1228,40 +1259,23 @@ void SecondaryInteractionsAlgorithm::GetViableTwoViewMatches(const CaloHitList &
             }
 
             const SplitPoint3D splitPoint(this->GetPandora(), pHitA, pHitB);
-            
-            /*
-            std::cout << "Considering doublet" << std::endl;
-            std::cout << "  - A    : " << pHitA << " - " << hitTypeA << std::endl;
-            std::cout << "  - B    : " << pHitB << " - " << hitTypeB << std::endl;
-            std::cout << "  - dX   : " << splitPoint.m_maxDeltaX << std::endl;
-            std::cout << "  - chi2 : " << splitPoint.m_chi2 << std::endl;
-            */
 
             if (splitPoint.m_maxDeltaX > m_maxMatchDeltaX)
                 continue;
 
-            //std::cout << "  - Passes dX cut!" << std::endl;
-
             // Get the 3D position as projected into the remaining view
             const auto projectedPosition = LArGeometryHelper::ProjectPosition(this->GetPandora(), splitPoint.m_position3D, hitTypeC);
-            const auto isInGap = LArGeometryHelper::IsInGap(this->GetPandora(), projectedPosition, hitTypeC, m_twoViewProjectionThreshold);
 
-            //if (isInGap) std::cout << "  - Projects to gap!" << std::endl;
+            // Insist that this position should project to a gap or onto a hit in the remaining view
+            const auto isInGap = LArGeometryHelper::IsInGap(this->GetPandora(), projectedPosition, hitTypeC, m_twoViewProjectionThreshold);
 
             bool projectsToHit = false;
             if (!hitsC.empty())
             {
                 const auto pNearestHit = this->GetClosestHitToPoint(hitsC, projectedPosition);
                 const auto nearestHitDistSquared = projectedPosition.GetDistanceSquared(pNearestHit->GetPositionVector());
-                //std::cout << "  - Nearest hit distance (squared) : " << nearestHitDistSquared << std::endl;
                 projectsToHit = (nearestHitDistSquared < m_twoViewProjectionThreshold * m_twoViewProjectionThreshold);
             }
-            else
-            {
-                //std::cout << "  - No hits in remaining view!" << std::endl;
-            }
-
-            //if (projectsToHit) std::cout << "  - Projects to hit! (not using)" << std::endl;
 
             if (!isInGap && !projectsToHit)
                 continue;
@@ -1298,36 +1312,8 @@ void SecondaryInteractionsAlgorithm::SplitHitListAtPoint(const HitType view, con
         const auto projectedPosition = LArGeometryHelper::ProjectPosition(this->GetPandora(), chosenSplitPoint.m_position3D, view);
         pSplitHit = this->GetClosestHitToPoint(caloHits, projectedPosition);
     }
-
-    //// BEGIN DEBUG
-    /*
-    PANDORA_MONITORING_API(VisualizeCaloHits(this->GetPandora(), &caloHits, "Hits", AUTO));
-    for (const auto &pCaloHit : caloHits)
-    {
-        const auto iter = hitHierarchyMap.find(pCaloHit);
-        if (iter == hitHierarchyMap.end())
-            continue;
-
-        const auto pos = pCaloHit->GetPositionVector();
-        const auto &daughters = iter->second;
-        for (const auto &pDaughterHit : daughters)
-        {
-            const auto daughterPos = pDaughterHit->GetPositionVector();
-            
-            const auto arrowA = daughterPos + ((daughterPos - pos).GetUnitVector().GetCrossProduct(CartesianVector(0.f, 1.f, 0.f)) * (+1) - (daughterPos - pos).GetUnitVector()) * 0.1;
-            const auto arrowB = daughterPos + ((daughterPos - pos).GetUnitVector().GetCrossProduct(CartesianVector(0.f, 1.f, 0.f)) * (-1) - (daughterPos - pos).GetUnitVector()) * 0.1;
-            
-            PANDORA_MONITORING_API(AddLineToVisualization(this->GetPandora(), &pos, &daughterPos, "", RED, 1, 1));
-            PANDORA_MONITORING_API(AddLineToVisualization(this->GetPandora(), &daughterPos, &arrowA, "", RED, 1, 1));
-            PANDORA_MONITORING_API(AddLineToVisualization(this->GetPandora(), &daughterPos, &arrowB, "", RED, 1, 1));
-        }
-    }
-    const auto splitHitPos = pSplitHit->GetPositionVector();
-    PANDORA_MONITORING_API(AddMarkerToVisualization(this->GetPandora(), &splitHitPos, "", BLUE, 2));
-    PANDORA_MONITORING_API(ViewEvent(this->GetPandora()));
-    */
-    //// END DEBUG
-    
+   
+    // Split the hits
     this->GetDownstreamHits(hitHierarchyMap, pSplitHit, downstreamHits);
     for (const auto &pCaloHit : caloHits)
     {
@@ -1349,8 +1335,6 @@ void SecondaryInteractionsAlgorithm::SplitPfoHits(const ViewToHitsMap &viewToCal
         const auto &hitHierarchyMap = viewToHitHierarchyMap.at(view);
 
         this->SplitHitListAtPoint(view, caloHits, hitHierarchyMap, chosenSplitPoint, upstreamHits, downstreamHits);
-        
-        // TODO make sure that the upstream & downstream definitions are consistent between views
     }
 
     // Handle the 3D hits
@@ -1419,8 +1403,6 @@ void SecondaryInteractionsAlgorithm::SplitPfoClusters(const ParticleFlowObject *
                 throw StatusCodeException(STATUS_CODE_NOT_FOUND);
         }
 
-        std::cout << "Splitting cluster in list: " << clusterListName << std::endl;
-
         const StatusCode listChangeStatusCode(PandoraContentApi::ReplaceCurrentList<Cluster>(*this, clusterListName));
         if (listChangeStatusCode == STATUS_CODE_NOT_FOUND)
             continue;
@@ -1457,10 +1439,6 @@ void SecondaryInteractionsAlgorithm::SplitPfoClusters(const ParticleFlowObject *
 
 void SecondaryInteractionsAlgorithm::SplitPfo(const ParticleFlowObject *const pPfo, const ClusterList &upstreamClusters, const ClusterList &downstreamClusters, PfoList &pfosToSave, PfoList &pfosToDelete) const
 {
-    std::cout << "Input PFO" << std::endl;
-    std::cout << " - nParents   : " << pPfo->GetParentPfoList().size() << std::endl;
-    std::cout << " - nDaughters : " << pPfo->GetDaughterPfoList().size() << std::endl;
-
     PandoraContentApi::ParticleFlowObject::Parameters pfoParameters;
     pfoParameters.m_particleId = pPfo->GetParticleId();
     pfoParameters.m_charge = pPfo->GetCharge();
@@ -1495,103 +1473,6 @@ void SecondaryInteractionsAlgorithm::SplitPfo(const ParticleFlowObject *const pP
             
     // Make the parent daughter link
     PANDORA_THROW_RESULT_IF(STATUS_CODE_SUCCESS, !=, PandoraContentApi::SetPfoParentDaughterRelationship(*this, pUpstreamPfo, pDownstreamPfo));
-}
-
-// -----------------------------------------------------------------------------------------------------------------------------------------
-
-float SecondaryInteractionsAlgorithm::GetDimension(const CaloHitList &hits) const
-{
-    if (hits.size() <= 1)
-        throw StatusCodeException(STATUS_CODE_INVALID_PARAMETER);
-
-    float minX = std::numeric_limits<float>::max();
-    float minZ = std::numeric_limits<float>::max();
-    float maxX = -std::numeric_limits<float>::max();
-    float maxZ = -std::numeric_limits<float>::max();
-
-    for (const auto &pHit : hits)
-    {
-        const auto view = pHit->GetHitType();
-        if (view != TPC_VIEW_U && view != TPC_VIEW_V && view != TPC_VIEW_W)
-            throw StatusCodeException(STATUS_CODE_INVALID_PARAMETER);
-
-        const auto pos = pHit->GetPositionVector();
-        const auto x = pos.GetX();
-        const auto z = pos.GetZ();
-
-        minX = std::min(x, minX);
-        minZ = std::min(z, minZ);
-        maxX = std::max(x, maxX);
-        maxZ = std::max(z, maxZ);
-    }
-
-    // Ensure to floating point accuracy all hits are within the bounds
-    minX -= std::numeric_limits<float>::epsilon();
-    maxX += std::numeric_limits<float>::epsilon();
-    minZ -= std::numeric_limits<float>::epsilon();
-    maxZ += std::numeric_limits<float>::epsilon();
-   
-    const auto deltaX = maxX - minX;
-    const auto deltaZ = maxZ - minZ;
-    const auto maxBoxSize = std::max(deltaX, deltaZ);
-
-    const auto boxSize = 0.3 * 2;
-    const auto nBoxes = this->CountBoxes(hits, boxSize, minX, maxX, minZ, maxZ);
-
-    const auto boxSizeFactor = std::log(maxBoxSize / boxSize);
-    const auto nBoxesFactor = std::log(nBoxes);
-    const auto D = nBoxesFactor / boxSizeFactor;
-
-    LArFormattingHelper::Table table({"minX", "maxX", "minZ", "maxZ", "", "maxBoxSize", "boxSize", "", "nBoxes", "D"});
-    table.AddElement(minX);
-    table.AddElement(maxX);
-    table.AddElement(minZ);
-    table.AddElement(maxZ);
-    table.AddElement(maxBoxSize);
-    table.AddElement(boxSize);
-    table.AddElement(nBoxes);
-    table.AddElement(D);
-    table.Print();
-
-    return 0.f;    
-}
-
-// -----------------------------------------------------------------------------------------------------------------------------------------
-
-unsigned int SecondaryInteractionsAlgorithm::CountBoxes(const CaloHitList &hits, const float boxSize, const float minX, const float maxX, const float minZ, const float maxZ) const
-{
-    const auto nBoxesX = static_cast<unsigned int>(std::ceil((maxX - minX) / boxSize));
-    const auto nBoxesZ = static_cast<unsigned int>(std::ceil((maxZ - minZ) / boxSize));
-
-    // Make a "matrix" of size nBoxesX:nBoxesZ with every element initialized to false
-    std::vector< std::vector<bool> > counter(nBoxesX, std::vector<bool>(nBoxesZ, false));
-    for (const auto &pHit : hits)
-    {
-        const auto pos = pHit->GetPositionVector();
-        const auto x = pos.GetX();
-        const auto z = pos.GetZ();
-
-        if (x < minX || x > maxX || z < minZ || z > maxZ)
-            throw StatusCodeException(STATUS_CODE_INVALID_PARAMETER);
-
-        const auto iX = static_cast<unsigned int>(std::floor((x - minX) / boxSize));
-        const auto iZ = static_cast<unsigned int>(std::floor((z - minZ) / boxSize));
-
-        // Set the counter to true in this bin, there is a hit there
-        counter.at(iX).at(iZ) = true;
-    }
-
-    unsigned int nBoxes = 0;
-    for (unsigned int iX = 0; iX < nBoxesX; ++iX)
-    {
-        for (unsigned int iZ = 0; iZ < nBoxesZ; ++iZ)
-        {
-            if (counter.at(iX).at(iZ))
-                nBoxes++;
-        }
-    }
-
-    return nBoxes;
 }
 
 // -----------------------------------------------------------------------------------------------------------------------------------------
@@ -1708,6 +1589,7 @@ StatusCode SecondaryInteractionsAlgorithm::ReadSettings(const TiXmlHandle xmlHan
     PANDORA_RETURN_RESULT_IF_AND_IF(STATUS_CODE_NOT_FOUND, STATUS_CODE_SUCCESS, !=, XmlHelper::ReadValue(xmlHandle, "TransverseBias", m_transverseBias));
     PANDORA_RETURN_RESULT_IF_AND_IF(STATUS_CODE_NOT_FOUND, STATUS_CODE_SUCCESS, !=, XmlHelper::ReadValue(xmlHandle, "NumberOfSampleHits", m_nSampleHits));
     PANDORA_RETURN_RESULT_IF_AND_IF(STATUS_CODE_NOT_FOUND, STATUS_CODE_SUCCESS, !=, XmlHelper::ReadValue(xmlHandle, "Cos3DAngleToWireThreshold", m_cos3DAngleToWireThreshold));
+    PANDORA_RETURN_RESULT_IF_AND_IF(STATUS_CODE_NOT_FOUND, STATUS_CODE_SUCCESS, !=, XmlHelper::ReadValue(xmlHandle, "MinVertexDistance", m_minVertexDist));
     PANDORA_RETURN_RESULT_IF_AND_IF(STATUS_CODE_NOT_FOUND, STATUS_CODE_SUCCESS, !=, XmlHelper::ReadValue(xmlHandle, "MinHitsThreshold", m_minHitsThreshold));
     PANDORA_RETURN_RESULT_IF_AND_IF(STATUS_CODE_NOT_FOUND, STATUS_CODE_SUCCESS, !=, XmlHelper::ReadValue(xmlHandle, "CosAngleThreshold", m_cosAngleThreshold));
     PANDORA_RETURN_RESULT_IF_AND_IF(STATUS_CODE_NOT_FOUND, STATUS_CODE_SUCCESS, !=, XmlHelper::ReadValue(xmlHandle, "Cos3DAngleThreshold", m_cos3DAngleThreshold));
