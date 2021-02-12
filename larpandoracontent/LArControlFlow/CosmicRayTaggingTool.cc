@@ -12,6 +12,7 @@
 
 #include "larpandoracontent/LArHelpers/LArClusterHelper.h"
 #include "larpandoracontent/LArHelpers/LArPfoHelper.h"
+#include "larpandoracontent/LArHelpers/LArMCParticleHelper.h"
 
 #include "larpandoracontent/LArObjects/LArCaloHit.h"
 
@@ -71,7 +72,7 @@ StatusCode CosmicRayTaggingTool::Initialize()
 
 //------------------------------------------------------------------------------------------------------------------------------------------
 
-void CosmicRayTaggingTool::FindAmbiguousPfos(const PfoList &parentCosmicRayPfos, PfoList &ambiguousPfos, const MasterAlgorithm *const /*pAlgorithm*/)
+void CosmicRayTaggingTool::FindAmbiguousPfos(const PfoList &parentCosmicRayPfos, PfoList &ambiguousPfos, const MasterAlgorithm *const pAlgorithm)
 {
     if (this->GetPandora().GetSettings()->ShouldDisplayAlgorithmInfo())
         std::cout << "----> Running Algorithm Tool: " << this->GetInstanceName() << ", " << this->GetType() << std::endl;
@@ -128,6 +129,126 @@ void CosmicRayTaggingTool::FindAmbiguousPfos(const PfoList &parentCosmicRayPfos,
 
     PfoToBoolMap pfoToIsLikelyCRMuonMap;
     this->TagCRMuons(candidates, pfoToInTimeMap, pfoToIsTopToBottomMap, neutrinoSliceSet, pfoToIsLikelyCRMuonMap);
+
+    //// BEGIN DEBUG
+
+    // Get the MCParticles
+    const MCParticleList *pMCParticleList = nullptr;
+    PANDORA_THROW_RESULT_IF(STATUS_CODE_SUCCESS, !=, PandoraContentApi::GetCurrentList(*pAlgorithm, pMCParticleList));
+
+    // Get the hits
+    const CaloHitList *pCaloHitList = nullptr;
+    PANDORA_THROW_RESULT_IF(STATUS_CODE_SUCCESS, !=, PandoraContentApi::GetList(*pAlgorithm, "CaloHitList2D", pCaloHitList));
+
+    // Identify neutrino induced MCParticles, and get mappings to their hits
+    LArMCParticleHelper::MCContributionMap nuMCParticlesToGoodHitsMap;
+
+    LArMCParticleHelper::PrimaryParameters parameters;
+    parameters.m_minPrimaryGoodHits = 0;
+    parameters.m_minHitsForGoodView = 0;
+    parameters.m_minPrimaryGoodViews = 0;
+    LArMCParticleHelper::SelectReconstructableMCParticles(pMCParticleList, pCaloHitList, parameters, LArMCParticleHelper::IsBeamNeutrinoFinalState, nuMCParticlesToGoodHitsMap);
+
+    // Get the hit sharing maps between Pfos and these primary MCParticles
+    LArMCParticleHelper::MCContributionMapVector mcParticlesToGoodHitsMaps({nuMCParticlesToGoodHitsMap});
+    LArMCParticleHelper::PfoContributionMap pfoToReconstructable2DHitsMap;
+    LArMCParticleHelper::GetPfoToReconstructable2DHitsMap(parentCosmicRayPfos, mcParticlesToGoodHitsMaps, pfoToReconstructable2DHitsMap);
+
+    LArMCParticleHelper::PfoToMCParticleHitSharingMap pfoToMCParticleHitSharingMap;
+    LArMCParticleHelper::MCParticleToPfoHitSharingMap mcParticleToPfoHitSharingMap;
+    LArMCParticleHelper::GetPfoMCParticleHitSharingMaps(pfoToReconstructable2DHitsMap, mcParticlesToGoodHitsMaps, pfoToMCParticleHitSharingMap, mcParticleToPfoHitSharingMap);
+
+    for (const auto &candidate : candidates)
+    {
+        std::cout << "CR candidate" << std::endl;
+        std::cout << " - PFO:       " << candidate.m_pPfo << std::endl;
+
+        // Get the downstream PFOs
+        PfoList downstreamPfos;
+        LArPfoHelper::GetAllDownstreamPfos(candidate.m_pPfo, downstreamPfos);
+
+        // Get the hits in this PFO (and it's daughters)
+        CaloHitList pfoHits;
+        LArPfoHelper::GetCaloHits(downstreamPfos, TPC_VIEW_U, pfoHits);
+        LArPfoHelper::GetCaloHits(downstreamPfos, TPC_VIEW_V, pfoHits);
+        LArPfoHelper::GetCaloHits(downstreamPfos, TPC_VIEW_W, pfoHits);
+        LArPfoHelper::GetIsolatedCaloHits(downstreamPfos, TPC_VIEW_U, pfoHits);
+        LArPfoHelper::GetIsolatedCaloHits(downstreamPfos, TPC_VIEW_V, pfoHits);
+        LArPfoHelper::GetIsolatedCaloHits(downstreamPfos, TPC_VIEW_W, pfoHits);
+
+        // Get the hits that come from a neutrino induced particle
+        const auto pfoHitsFromNu = pfoToReconstructable2DHitsMap.at(candidate.m_pPfo);
+
+        if (pfoHits.empty())
+            throw StatusCodeException(STATUS_CODE_OUT_OF_RANGE);
+
+        const auto nuPurity = static_cast<float>(pfoHitsFromNu.size()) / static_cast<float>(pfoHits.size());
+
+        std::cout << " - Hits:      " << pfoHits.size() << std::endl;
+        std::cout << " - Nu hits:   " << pfoHitsFromNu.size() << std::endl;
+        std::cout << " - Nu purity: " << nuPurity << std::endl;
+        std::cout << " - Slice:     " << candidate.m_sliceId << std::endl;
+        std::cout << " - Can fit?   " << candidate.m_canFit << std::endl;
+
+        if (candidate.m_canFit)
+        {
+            std::cout << " - End 1:     " << candidate.m_endPoint1.GetX() << ", " << candidate.m_endPoint1.GetY() << ", " << candidate.m_endPoint1.GetZ() << std::endl;
+            std::cout << " - End 2:     " << candidate.m_endPoint2.GetX() << ", " << candidate.m_endPoint2.GetY() << ", " << candidate.m_endPoint2.GetZ() << std::endl;
+            std::cout << " - Length:    " << candidate.m_length << std::endl;
+            std::cout << " - Curvature: " << candidate.m_curvature << std::endl;
+            std::cout << " - Theta:     " << candidate.m_theta << std::endl;
+        }
+
+        std::cout << " - In time?   " << pfoToInTimeMap.at(candidate.m_pPfo) << std::endl;
+        std::cout << " - Contained? " << pfoToIsContainedMap.at(candidate.m_pPfo) << std::endl;
+        std::cout << " - Top-Bot?   " << pfoToIsTopToBottomMap.at(candidate.m_pPfo) << std::endl;
+        std::cout << " - Nu slice?  " << neutrinoSliceSet.count(candidate.m_sliceId) << std::endl;
+
+        // ATTN in the logic, we technically require all PFOs in the slice to be in time for the slice to be likely neutrino
+        const bool likelyNeutrino(candidate.m_canFit && pfoToInTimeMap.at(candidate.m_pPfo) && (candidate.m_theta < m_maxNeutrinoCosTheta || pfoToIsContainedMap.at(candidate.m_pPfo)));
+        std::cout << " - Likely nu? " << likelyNeutrino << std::endl;
+        std::cout << " - CR tagged? " << pfoToIsLikelyCRMuonMap.at(candidate.m_pPfo) << std::endl;
+
+        // Print the MC info
+        std::cout << " - Matched MCParticles:" << std::endl;
+        const auto iter = pfoToMCParticleHitSharingMap.find(candidate.m_pPfo);
+        if (iter == pfoToMCParticleHitSharingMap.end())
+            continue;
+
+        float totalPurity = 0.f;
+        float significance = 0.f;
+
+        const auto mcParticleHitPairs = iter->second;
+        for (const auto &[pMCParticle, sharedHits] : mcParticleHitPairs)
+        {
+            std::cout << "    - " << pMCParticle << std::endl;
+            std::cout << "      - PDG:          " << pMCParticle->GetParticleId() << std::endl;
+            std::cout << "      - Energy:       " << pMCParticle->GetEnergy() << std::endl;
+
+            const auto mcParticleHits = nuMCParticlesToGoodHitsMap.at(pMCParticle);
+            std::cout << "      - Hits:         " << mcParticleHits.size() << std::endl;
+            std::cout << "      - Shared:       " << sharedHits.size() << std::endl;
+
+            // Get the purity and completeness of the match
+            const auto matchPurity = static_cast<float>(sharedHits.size()) / static_cast<float>(pfoHits.size());
+            std::cout << "      - Purity:       " << matchPurity << std::endl;
+
+            if (mcParticleHits.empty())
+                throw StatusCodeException(STATUS_CODE_OUT_OF_RANGE);
+
+            const auto matchCompleteness = static_cast<float>(sharedHits.size()) / static_cast<float>(mcParticleHits.size());
+            std::cout << "      - Completeness: " << matchCompleteness << std::endl;
+
+            totalPurity += matchPurity;
+            significance += matchCompleteness;
+        }
+
+        std::cout << " - Nu purity  " << totalPurity << std::endl;
+        std::cout << " - Nu signif  " << significance << std::endl;
+        std::cout << "------------------------------------------------" << std::endl;
+    }
+    //// END DEBUG
+
 
     for (const ParticleFlowObject *const pPfo : parentCosmicRayPfos)
     {
