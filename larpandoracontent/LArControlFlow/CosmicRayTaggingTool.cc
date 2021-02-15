@@ -45,6 +45,13 @@ CosmicRayTaggingTool::CosmicRayTaggingTool() :
 
 //------------------------------------------------------------------------------------------------------------------------------------------
 
+CosmicRayTaggingTool::~CosmicRayTaggingTool()
+{
+    m_pFile->Write();
+}
+
+//------------------------------------------------------------------------------------------------------------------------------------------
+
 StatusCode CosmicRayTaggingTool::Initialize()
 {
     if ("nominal" == m_cutMode)
@@ -66,6 +73,49 @@ StatusCode CosmicRayTaggingTool::Initialize()
         std::cout << "CosmicRayTaggingTool - invalid cut mode " << m_cutMode << std::endl;
         return STATUS_CODE_INVALID_PARAMETER;
     }
+
+    // Setup the output root file
+    m_pFile = std::make_shared<TFile>("crTagging.root", "RECREATE");
+    m_pTree = std::make_shared<TTree>("events", "events");
+
+    m_pTree->Branch("truth_nuPdgCode", &m_event.truth_nuPdgCode);
+    m_pTree->Branch("truth_nuEnergy", &m_event.truth_nuEnergy);
+    m_pTree->Branch("truth_nuVertexX", &m_event.truth_nuVertexX);
+    m_pTree->Branch("truth_nuVertexY", &m_event.truth_nuVertexY);
+    m_pTree->Branch("truth_nuVertexZ", &m_event.truth_nuVertexZ);
+    m_pTree->Branch("p_truth_id", &m_event.p_truth_id);
+    m_pTree->Branch("p_truth_pdgCode", &m_event.p_truth_pdgCode);
+    m_pTree->Branch("p_truth_energy", &m_event.p_truth_energy);
+    m_pTree->Branch("p_truth_momentumX", &m_event.p_truth_momentumX);
+    m_pTree->Branch("p_truth_momentumY", &m_event.p_truth_momentumY);
+    m_pTree->Branch("p_truth_momentumZ", &m_event.p_truth_momentumZ);
+    m_pTree->Branch("p_truth_nHitsU", &m_event.p_truth_nHitsU);
+    m_pTree->Branch("p_truth_nHitsV", &m_event.p_truth_nHitsV);
+    m_pTree->Branch("p_truth_nHitsW", &m_event.p_truth_nHitsW);
+    m_pTree->Branch("p_reco_id", &m_event.p_reco_id);
+    m_pTree->Branch("p_reco_nHitsU", &m_event.p_reco_nHitsU);
+    m_pTree->Branch("p_reco_nHitsV", &m_event.p_reco_nHitsV);
+    m_pTree->Branch("p_reco_nHitsW", &m_event.p_reco_nHitsW);
+    m_pTree->Branch("p_reco_canFit", &m_event.p_reco_canFit);
+    m_pTree->Branch("p_reco_end1X", &m_event.p_reco_end1X);
+    m_pTree->Branch("p_reco_end1Y", &m_event.p_reco_end1Y);
+    m_pTree->Branch("p_reco_end1Z", &m_event.p_reco_end1Z);
+    m_pTree->Branch("p_reco_end2X", &m_event.p_reco_end2X);
+    m_pTree->Branch("p_reco_end2Y", &m_event.p_reco_end2Y);
+    m_pTree->Branch("p_reco_end2Z", &m_event.p_reco_end2Z);
+    m_pTree->Branch("p_reco_length", &m_event.p_reco_length);
+    m_pTree->Branch("p_reco_cosTheta", &m_event.p_reco_cosTheta);
+    m_pTree->Branch("p_reco_curvature", &m_event.p_reco_curvature);
+    m_pTree->Branch("p_reco_inTime", &m_event.p_reco_inTime);
+    m_pTree->Branch("p_reco_isContained", &m_event.p_reco_isContained);
+    m_pTree->Branch("p_reco_isTopToBottom", &m_event.p_reco_isTopToBottom);
+    m_pTree->Branch("p_reco_sliceId", &m_event.p_reco_sliceId);
+    m_pTree->Branch("p_reco_linkedIds", &m_event.p_reco_linkedIds);
+    m_pTree->Branch("p_reco_inNuSlice", &m_event.p_reco_inNuSlice);
+    m_pTree->Branch("p_reco_match_ids", &m_event.p_reco_match_ids);
+    m_pTree->Branch("p_reco_match_hitsU", &m_event.p_reco_match_hitsU);
+    m_pTree->Branch("p_reco_match_hitsV", &m_event.p_reco_match_hitsV);
+    m_pTree->Branch("p_reco_match_hitsW", &m_event.p_reco_match_hitsW);
 
     return STATUS_CODE_SUCCESS;
 }
@@ -131,6 +181,9 @@ void CosmicRayTaggingTool::FindAmbiguousPfos(const PfoList &parentCosmicRayPfos,
     this->TagCRMuons(candidates, pfoToInTimeMap, pfoToIsTopToBottomMap, neutrinoSliceSet, pfoToIsLikelyCRMuonMap);
 
     //// BEGIN DEBUG
+
+    // Reset the output event so we can fill it again
+    this->ResetOutputEvent();
 
     // Get the MCParticles
     const MCParticleList *pMCParticleList = nullptr;
@@ -247,14 +300,63 @@ void CosmicRayTaggingTool::FindAmbiguousPfos(const PfoList &parentCosmicRayPfos,
         std::cout << " - Nu signif  " << significance << std::endl;
         std::cout << "------------------------------------------------" << std::endl;
     }
-    //// END DEBUG
 
+    // Fill the tree!
+    m_pTree->Fill();
+    //// END DEBUG
 
     for (const ParticleFlowObject *const pPfo : parentCosmicRayPfos)
     {
         if (!pfoToIsLikelyCRMuonMap.at(pPfo))
             ambiguousPfos.push_back(pPfo);
     }
+}
+
+//------------------------------------------------------------------------------------------------------------------------------------------
+
+void CosmicRayTaggingTool::ResetOutputEvent()
+{
+    // Set dummy values
+    m_event.truth_nuPdgCode = -std::numeric_limits<int>::max();
+    m_event.truth_nuEnergy = -std::numeric_limits<float>::max();
+    m_event.truth_nuVertexX = -std::numeric_limits<float>::max();
+    m_event.truth_nuVertexY = -std::numeric_limits<float>::max();
+    m_event.truth_nuVertexZ = -std::numeric_limits<float>::max();
+
+    // Clear any vectors
+    m_event.p_truth_id.clear();
+    m_event.p_truth_pdgCode.clear();
+    m_event.p_truth_energy.clear();
+    m_event.p_truth_momentumX.clear();
+    m_event.p_truth_momentumY.clear();
+    m_event.p_truth_momentumZ.clear();
+    m_event.p_truth_nHitsU.clear();
+    m_event.p_truth_nHitsV.clear();
+    m_event.p_truth_nHitsW.clear();
+    m_event.p_reco_id.clear();
+    m_event.p_reco_nHitsU.clear();
+    m_event.p_reco_nHitsV.clear();
+    m_event.p_reco_nHitsW.clear();
+    m_event.p_reco_canFit.clear();
+    m_event.p_reco_end1X.clear();
+    m_event.p_reco_end1Y.clear();
+    m_event.p_reco_end1Z.clear();
+    m_event.p_reco_end2X.clear();
+    m_event.p_reco_end2Y.clear();
+    m_event.p_reco_end2Z.clear();
+    m_event.p_reco_length.clear();
+    m_event.p_reco_cosTheta.clear();
+    m_event.p_reco_curvature.clear();
+    m_event.p_reco_inTime.clear();
+    m_event.p_reco_isContained.clear();
+    m_event.p_reco_isTopToBottom.clear();
+    m_event.p_reco_sliceId.clear();
+    m_event.p_reco_linkedIds.clear();
+    m_event.p_reco_inNuSlice.clear();
+    m_event.p_reco_match_ids.clear();
+    m_event.p_reco_match_hitsU.clear();
+    m_event.p_reco_match_hitsV.clear();
+    m_event.p_reco_match_hitsW.clear();
 }
 
 //------------------------------------------------------------------------------------------------------------------------------------------

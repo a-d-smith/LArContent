@@ -15,6 +15,7 @@
 #include <unordered_map>
 
 #include "TFile.h"
+#include "TTree.h"
 
 namespace lar_content
 {
@@ -29,6 +30,11 @@ public:
      *  @brief  Default constructor
      */
     CosmicRayTaggingTool();
+
+    /**
+    *  @brief  Destructor
+    */
+    ~CosmicRayTaggingTool();
 
     pandora::StatusCode Initialize();
     void FindAmbiguousPfos(const pandora::PfoList &parentCosmicRayPfos, pandora::PfoList &ambiguousPfos, const MasterAlgorithm *const pAlgorithm);
@@ -183,6 +189,11 @@ private:
     void TagCRMuons(const CRCandidateList &candidates, const PfoToBoolMap &pfoToInTimeMap, const PfoToBoolMap &pfoToIsTopToBottomMap,
         const UIntSet &neutrinoSliceSet, PfoToBoolMap &pfoToIsLikelyCRMuonMap) const;
 
+    /**
+    *  @brief  Reset the output event object
+    */
+    void ResetOutputEvent();
+
     pandora::StatusCode ReadSettings(const pandora::TiXmlHandle xmlHandle);
 
     typedef std::pair<const ThreeDSlidingFitResult, const ThreeDSlidingFitResult> SlidingFitPair;
@@ -216,6 +227,67 @@ private:
     float           m_face_Yt;                  ///< Top        Y face
     float           m_face_Zu;                  ///< Upstream   Z face
     float           m_face_Zd;                  ///< Downstream Z face
+
+    std::shared_ptr<TFile> m_pFile;             ///< The output root file
+    std::shared_ptr<TTree> m_pTree;             ///< The output root tree
+
+    /**
+    *  @brief  The output event structure
+    */
+    struct OutputEvent
+    {
+        // Information about the true neutrino
+        int   truth_nuPdgCode;  ///< The neutrino PDG code
+        float truth_nuEnergy;   ///< The neutrino energy
+        float truth_nuVertexX;  ///< The x-component of the neutrino vertex
+        float truth_nuVertexY;  ///< The y-component of the neutrino vertex
+        float truth_nuVertexZ;  ///< The z-component of the neutrino vertex
+
+        // Information about a truth (final state) particle
+        std::vector<int>   p_truth_id;        ///< A unique identifier for the truth particle
+        std::vector<int>   p_truth_pdgCode;   ///< The PDG code
+        std::vector<float> p_truth_energy;    ///< The energy
+        std::vector<float> p_truth_momentumX; ///< The x-component of the momentum
+        std::vector<float> p_truth_momentumY; ///< The y-component of the momentum
+        std::vector<float> p_truth_momentumZ; ///< The z-component of the momentum
+        std::vector<int>   p_truth_nHitsU;    ///< The number of hits in the U view
+        std::vector<int>   p_truth_nHitsV;    ///< The number of hits in the V view
+        std::vector<int>   p_truth_nHitsW;    ///< The number of hits in the W view
+
+        // Information about a reco particle
+        std::vector<int>   p_reco_id;       ///< A unique identifier for the reco particle
+        std::vector<int>   p_reco_nHitsU;   ///< The number of hits in the U view
+        std::vector<int>   p_reco_nHitsV;   ///< The number of hits in the V view
+        std::vector<int>   p_reco_nHitsW;   ///< The number of hits in the W view
+
+        // Fitted track-information
+        std::vector<bool>  p_reco_canFit;    ///< If the reco particle can be fitted with a track
+        std::vector<float> p_reco_end1X;     ///< The X-component of the first fitted end-point
+        std::vector<float> p_reco_end1Y;     ///< The Y-component of the first fitted end-point
+        std::vector<float> p_reco_end1Z;     ///< The Z-component of the first fitted end-point
+        std::vector<float> p_reco_end2X;     ///< The X-component of the second fitted end-point
+        std::vector<float> p_reco_end2Y;     ///< The Y-component of the second fitted end-point
+        std::vector<float> p_reco_end2Z;     ///< The Z-component of the second fitted end-point
+        std::vector<float> p_reco_length;    ///< The fitted track-length
+        std::vector<float> p_reco_cosTheta;  ///< The angle to the vertical
+        std::vector<float> p_reco_curvature; ///< The curvature of the track
+
+        // The cut values
+        std::vector<bool>  p_reco_inTime;        ///< If the reco particle is consistent with the beam in time
+        std::vector<bool>  p_reco_isContained;   ///< If the reco particle is contained (assuming the t0 is correct)
+        std::vector<bool>  p_reco_isTopToBottom; ///< If the reco particle traverses the detector from top-to-bottom
+        std::vector<int>   p_reco_sliceId;       ///< The ID of the "slice" containing the reco particle
+        std::vector<int>   p_reco_linkedIds;     ///< The IDs of the reco particles to which this particle is immediately associated
+        std::vector<bool>  p_reco_inNuSlice;     ///< If the slice containing the PFO is tagged as likely neutrino
+
+        // Matching information from the reco-particle to the truth particles
+        std::vector< std::vector<int> >   p_reco_match_ids;         ///< The IDs of the matched truth particles
+        std::vector< std::vector<int> >   p_reco_match_hitsU;       ///< The number of hits matched with a truth particle in the U view
+        std::vector< std::vector<int> >   p_reco_match_hitsV;       ///< The number of hits matched with a truth particle in the V view
+        std::vector< std::vector<int> >   p_reco_match_hitsW;       ///< The number of hits matched with a truth particle in the W view
+    };
+
+    OutputEvent m_event; ///< The output event
 };
 
 } // namespace lar_content
