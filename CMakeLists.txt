@@ -41,6 +41,12 @@ if(DEFINED ENV{CETBUILDTOOLS_VERSION})
     cet_find_library( PANDORAMONITORING NAMES PandoraMonitoring PATHS ENV PANDORA_LIB )
     add_definitions("-DMONITORING")
 
+    # Sacrilegious
+    find_package(ROOT 5.26.00 REQUIRED)
+    include_directories(${ROOT_INCLUDE_DIRS})
+    link_libraries(${ROOT_LIBRARIES} ${ROOT_COMPONENT_LIBRARIES})
+    add_definitions(${ROOT_DEFINITIONS})
+
     # ADD SOURCE CODE SUBDIRECTORIES HERE
     add_subdirectory(larpandoracontent)
 

@@ -35,6 +35,7 @@ cet_make( LIBRARY_NAME LArPandoraContent
           SUBDIRS ${subdir_list}
 	  LIBRARIES ${PANDORASDK}
 	            ${PANDORAMONITORING}
+                ${ROOT_BASIC_LIB_LIST}
 )
 
 install_source( SUBDIRS ${subdir_list} )

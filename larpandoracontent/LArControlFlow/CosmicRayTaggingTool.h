@@ -14,6 +14,8 @@
 
 #include <unordered_map>
 
+#include "TFile.h"
+
 namespace lar_content
 {
 
