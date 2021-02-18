@@ -237,6 +237,7 @@ private:
     struct OutputEvent
     {
         // Information about the true neutrino
+        bool  truth_hasNu;      ///< If we have a neutrino in truth
         int   truth_nuPdgCode;  ///< The neutrino PDG code
         float truth_nuEnergy;   ///< The neutrino energy
         float truth_nuVertexX;  ///< The x-component of the neutrino vertex
@@ -250,6 +251,12 @@ private:
         std::vector<float> p_truth_momentumX; ///< The x-component of the momentum
         std::vector<float> p_truth_momentumY; ///< The y-component of the momentum
         std::vector<float> p_truth_momentumZ; ///< The z-component of the momentum
+        std::vector<float> p_truth_startX;    ///< The x-component of the start position
+        std::vector<float> p_truth_startY;    ///< The y-component of the start position
+        std::vector<float> p_truth_startZ;    ///< The z-component of the start position
+        std::vector<float> p_truth_endX;      ///< The x-component of the end position
+        std::vector<float> p_truth_endY;      ///< The y-component of the end position
+        std::vector<float> p_truth_endZ;      ///< The z-component of the end position
         std::vector<int>   p_truth_nHitsU;    ///< The number of hits in the U view
         std::vector<int>   p_truth_nHitsV;    ///< The number of hits in the V view
         std::vector<int>   p_truth_nHitsW;    ///< The number of hits in the W view
@@ -276,9 +283,13 @@ private:
         std::vector<bool>  p_reco_inTime;        ///< If the reco particle is consistent with the beam in time
         std::vector<bool>  p_reco_isContained;   ///< If the reco particle is contained (assuming the t0 is correct)
         std::vector<bool>  p_reco_isTopToBottom; ///< If the reco particle traverses the detector from top-to-bottom
-        std::vector<int>   p_reco_sliceId;       ///< The ID of the "slice" containing the reco particle
-        std::vector<int>   p_reco_linkedIds;     ///< The IDs of the reco particles to which this particle is immediately associated
         std::vector<bool>  p_reco_inNuSlice;     ///< If the slice containing the PFO is tagged as likely neutrino
+
+        std::vector<bool>  p_reco_isCRTagged;    ///< If the reco particle is tagged as a cosmic-ray
+
+        // Association to other PFOs
+        std::vector<int>                p_reco_sliceId;   ///< The ID of the "slice" containing the reco particle
+        std::vector< std::vector<int> > p_reco_linkedIds; ///< The IDs of the reco particles to which this particle is immediately associated
 
         // Matching information from the reco-particle to the truth particles
         std::vector< std::vector<int> >   p_reco_match_ids;         ///< The IDs of the matched truth particles

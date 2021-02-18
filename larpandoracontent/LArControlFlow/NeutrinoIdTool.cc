@@ -17,6 +17,7 @@
 #include "larpandoracontent/LArHelpers/LArMvaHelper.h"
 #include "larpandoracontent/LArHelpers/LArPcaHelper.h"
 #include "larpandoracontent/LArHelpers/LArFileHelper.h"
+#include "larpandoracontent/LArHelpers/LArMonitoringHelper.h"
 
 #include "larpandoracontent/LArObjects/LArThreeDSlidingFitResult.h"
 
@@ -35,6 +36,62 @@ NeutrinoIdTool::NeutrinoIdTool() :
     m_maxNeutrinos(1),
     m_filePathEnvironmentVariable("FW_SEARCH_PATH")
 {
+    // Setup the output root file
+    m_pFile = std::make_shared<TFile>("neutrinoID.root", "RECREATE");
+    m_pTree = std::make_shared<TTree>("events", "events");
+
+    m_pTree->Branch("truth_hasNu", &m_event.truth_hasNu);
+    m_pTree->Branch("truth_nuPdgCode", &m_event.truth_nuPdgCode);
+    m_pTree->Branch("truth_nuEnergy", &m_event.truth_nuEnergy);
+    m_pTree->Branch("truth_nuVertexX", &m_event.truth_nuVertexX);
+    m_pTree->Branch("truth_nuVertexY", &m_event.truth_nuVertexY);
+    m_pTree->Branch("truth_nuVertexZ", &m_event.truth_nuVertexZ);
+    m_pTree->Branch("p_truth_id", &m_event.p_truth_id);
+    m_pTree->Branch("p_truth_pdgCode", &m_event.p_truth_pdgCode);
+    m_pTree->Branch("p_truth_energy", &m_event.p_truth_energy);
+    m_pTree->Branch("p_truth_momentumX", &m_event.p_truth_momentumX);
+    m_pTree->Branch("p_truth_momentumY", &m_event.p_truth_momentumY);
+    m_pTree->Branch("p_truth_momentumZ", &m_event.p_truth_momentumZ);
+    m_pTree->Branch("p_truth_startX", &m_event.p_truth_startX);
+    m_pTree->Branch("p_truth_startY", &m_event.p_truth_startY);
+    m_pTree->Branch("p_truth_startZ", &m_event.p_truth_startZ);
+    m_pTree->Branch("p_truth_endX", &m_event.p_truth_endX);
+    m_pTree->Branch("p_truth_endY", &m_event.p_truth_endY);
+    m_pTree->Branch("p_truth_endZ", &m_event.p_truth_endZ);
+    m_pTree->Branch("p_truth_nHitsU", &m_event.p_truth_nHitsU);
+    m_pTree->Branch("p_truth_nHitsV", &m_event.p_truth_nHitsV);
+    m_pTree->Branch("p_truth_nHitsW", &m_event.p_truth_nHitsW);
+    m_pTree->Branch("nHitsU", &m_event.nHitsU);
+    m_pTree->Branch("nHitsV", &m_event.nHitsV);
+    m_pTree->Branch("nHitsW", &m_event.nHitsW);
+    m_pTree->Branch("nNuHitsU", &m_event.nNuHitsU);
+    m_pTree->Branch("nNuHitsV", &m_event.nNuHitsV);
+    m_pTree->Branch("nNuHitsW", &m_event.nNuHitsW);
+    m_pTree->Branch("s_nHitsU", &m_event.s_nHitsU);
+    m_pTree->Branch("s_nHitsV", &m_event.s_nHitsV);
+    m_pTree->Branch("s_nHitsW", &m_event.s_nHitsW);
+    m_pTree->Branch("s_nNuHitsU", &m_event.s_nNuHitsU);
+    m_pTree->Branch("s_nNuHitsV", &m_event.s_nNuHitsV);
+    m_pTree->Branch("s_nNuHitsW", &m_event.s_nNuHitsW);
+    m_pTree->Branch("s_areFeaturesAvailable", &m_event.s_areFeaturesAvailable);
+    m_pTree->Branch("s_nuNFinalStatePfos", &m_event.s_nuNFinalStatePfos);
+    m_pTree->Branch("s_nuNHitsTotal", &m_event.s_nuNHitsTotal);
+    m_pTree->Branch("s_nuVertexY", &m_event.s_nuVertexY);
+    m_pTree->Branch("s_nuWeightedDirZ", &m_event.s_nuWeightedDirZ);
+    m_pTree->Branch("s_nuNSpacePointsInSphere", &m_event.s_nuNSpacePointsInSphere);
+    m_pTree->Branch("s_nuEigenRatioInSphere", &m_event.s_nuEigenRatioInSphere);
+    m_pTree->Branch("s_crLongestTrackDirY", &m_event.s_crLongestTrackDirY);
+    m_pTree->Branch("s_crLongestTrackDeflection", &m_event.s_crLongestTrackDeflection);
+    m_pTree->Branch("s_crFracHitsInLongestTrack", &m_event.s_crFracHitsInLongestTrack);
+    m_pTree->Branch("s_nCRHitsMax", &m_event.s_nCRHitsMax);
+    m_pTree->Branch("s_score", &m_event.s_score);
+}
+
+//------------------------------------------------------------------------------------------------------------------------------------------
+
+NeutrinoIdTool::~NeutrinoIdTool()
+{
+    m_pFile->Write();
 }
 
 //------------------------------------------------------------------------------------------------------------------------------------------
@@ -71,7 +128,282 @@ void NeutrinoIdTool::SelectOutputPfos(const Algorithm *const pAlgorithm, const S
         return;
     }
 
+    //// BEGIN HACK ========================================================================================================================
+
+    // Reset the output event so we can fill it again
+    this->ResetOutputEvent();
+
+    // Get all hits
+    const CaloHitList *pCaloHitList(nullptr);
+    PANDORA_THROW_RESULT_IF(STATUS_CODE_SUCCESS, !=, PandoraContentApi::GetCurrentList(*pAlgorithm, pCaloHitList));
+
+    // Get the MCParticles
+    const MCParticleList *pMCParticleList = nullptr;
+    PANDORA_THROW_RESULT_IF(STATUS_CODE_SUCCESS, !=, PandoraContentApi::GetCurrentList(*pAlgorithm, pMCParticleList));
+
+    // Find the true neutrino (if it exists)
+    MCParticleVector trueNeutrinos;
+    LArMCParticleHelper::GetTrueNeutrinos(pMCParticleList, trueNeutrinos);
+
+    // We have a true neutrino
+    if (!trueNeutrinos.empty())
+    {
+        m_event.truth_hasNu = true;
+
+        // If we have multiple neutrinos then find the one with the largest energy (shouldn't happen often - if ever depending on the sample)
+        const MCParticle *pSelectedNeutrino = trueNeutrinos.front();
+        for (const auto &pNeutrino : trueNeutrinos)
+        {
+            if (pNeutrino->GetEnergy() > pSelectedNeutrino->GetEnergy())
+            {
+                pSelectedNeutrino = pNeutrino;
+            }
+        }
+
+        // Set the neutrino information
+        m_event.truth_nuPdgCode = pSelectedNeutrino->GetParticleId();
+        m_event.truth_nuEnergy = pSelectedNeutrino->GetEnergy();
+
+        const auto nuVertex = pSelectedNeutrino->GetVertex();
+        m_event.truth_nuVertexX = nuVertex.GetX();
+        m_event.truth_nuVertexY = nuVertex.GetY();
+        m_event.truth_nuVertexZ = nuVertex.GetZ();
+    }
+    // We don't have a true neutrino
+    else
+    {
+        m_event.truth_hasNu = false;
+    }
+
+    // Identify neutrino induced MCParticles, and get mappings to their hits
+    // ATTN here we have some requirement that the MCParticles are "reconstructable" - I think there's an implicit assumption that the
+    // MCParticle produces at least one hit... so not quite the same as all MCParticles
+    LArMCParticleHelper::MCContributionMap nuMCParticlesToGoodHitsMap;
+
+    LArMCParticleHelper::PrimaryParameters parameters;
+    parameters.m_minPrimaryGoodHits = 0;
+    parameters.m_minHitsForGoodView = 0;
+    parameters.m_minPrimaryGoodViews = 0;
+    LArMCParticleHelper::SelectReconstructableMCParticles(pMCParticleList, pCaloHitList, parameters, LArMCParticleHelper::IsBeamNeutrinoFinalState, nuMCParticlesToGoodHitsMap);
+
+    // Save the information about the neutrino induced MCParticles
+    // First, put them in an ordered container and sort them for reproducibility
+    MCParticleVector nuMCParticles;
+    LArMonitoringHelper::GetOrderedMCParticleVector({nuMCParticlesToGoodHitsMap}, nuMCParticles);
+
+    for (size_t id = 0; id < nuMCParticles.size(); ++id)
+    {
+        const auto &pMCParticle = nuMCParticles.at(id);
+
+        m_event.p_truth_id.push_back(id);
+
+        m_event.p_truth_pdgCode.push_back(pMCParticle->GetParticleId());
+        m_event.p_truth_energy.push_back(pMCParticle->GetEnergy());
+
+        const auto momentum = pMCParticle->GetMomentum();
+        m_event.p_truth_momentumX.push_back(momentum.GetX());
+        m_event.p_truth_momentumY.push_back(momentum.GetY());
+        m_event.p_truth_momentumZ.push_back(momentum.GetZ());
+
+        const auto start = pMCParticle->GetVertex();
+        m_event.p_truth_startX.push_back(start.GetX());
+        m_event.p_truth_startY.push_back(start.GetY());
+        m_event.p_truth_startZ.push_back(start.GetZ());
+
+        const auto end = pMCParticle->GetEndpoint();
+        m_event.p_truth_endX.push_back(end.GetX());
+        m_event.p_truth_endY.push_back(end.GetY());
+        m_event.p_truth_endZ.push_back(end.GetZ());
+
+        const auto hits = nuMCParticlesToGoodHitsMap.at(pMCParticle);
+        m_event.p_truth_nHitsU.push_back(LArMonitoringHelper::CountHitsByType(TPC_VIEW_U, hits));
+        m_event.p_truth_nHitsV.push_back(LArMonitoringHelper::CountHitsByType(TPC_VIEW_V, hits));
+        m_event.p_truth_nHitsW.push_back(LArMonitoringHelper::CountHitsByType(TPC_VIEW_W, hits));
+    }
+
+    // Put the hits in the required format
+    CaloHitList caloHitList;
+    caloHitList.insert(caloHitList.end(), pCaloHitList->begin(), pCaloHitList->end());
+
+    m_event.nHitsU = LArMonitoringHelper::CountHitsByType(TPC_VIEW_U, caloHitList);
+    m_event.nHitsV = LArMonitoringHelper::CountHitsByType(TPC_VIEW_V, caloHitList);
+    m_event.nHitsW = LArMonitoringHelper::CountHitsByType(TPC_VIEW_W, caloHitList);
+
+    // Get the total number of neutrino induced hits in the event
+    CaloHitList nuHitsTotal;
+    this->GetNeutrinoInducedHits(caloHitList, nuHitsTotal);
+
+    m_event.nNuHitsU = LArMonitoringHelper::CountHitsByType(TPC_VIEW_U, nuHitsTotal);
+    m_event.nNuHitsV = LArMonitoringHelper::CountHitsByType(TPC_VIEW_V, nuHitsTotal);
+    m_event.nNuHitsW = LArMonitoringHelper::CountHitsByType(TPC_VIEW_W, nuHitsTotal);
+
+    // Loop over the slices
+    for (unsigned int sliceIndex = 0, nSlices = nuSliceHypotheses.size(); sliceIndex < nSlices; ++sliceIndex)
+    {
+        // Collect up the hits from the CR and neutrino hypotheses
+        CaloHitList caloHitsInSlice;
+        this->CollectHitsInSlice(nuSliceHypotheses.at(sliceIndex), crSliceHypotheses.at(sliceIndex), caloHitsInSlice);
+
+        // Get the total number of hits in the slice
+        m_event.s_nHitsU.push_back(LArMonitoringHelper::CountHitsByType(TPC_VIEW_U, caloHitsInSlice));
+        m_event.s_nHitsV.push_back(LArMonitoringHelper::CountHitsByType(TPC_VIEW_V, caloHitsInSlice));
+        m_event.s_nHitsW.push_back(LArMonitoringHelper::CountHitsByType(TPC_VIEW_W, caloHitsInSlice));
+
+        // Get the total number of neutrino induced hits in this slice
+        CaloHitList nuHitsInSlice;
+        this->GetNeutrinoInducedHits(caloHitsInSlice, nuHitsInSlice);
+
+        m_event.s_nNuHitsU.push_back(LArMonitoringHelper::CountHitsByType(TPC_VIEW_U, nuHitsInSlice));
+        m_event.s_nNuHitsV.push_back(LArMonitoringHelper::CountHitsByType(TPC_VIEW_V, nuHitsInSlice));
+        m_event.s_nNuHitsW.push_back(LArMonitoringHelper::CountHitsByType(TPC_VIEW_W, nuHitsInSlice));
+
+        // Determine if we can access the features for this slice
+        const auto sliceFeatures = sliceFeaturesVector.at(sliceIndex);
+        const bool areFeaturesAvailable = sliceFeatures.IsFeatureVectorAvailable();
+        m_event.s_areFeaturesAvailable.push_back(areFeaturesAvailable);
+
+        if (areFeaturesAvailable)
+        {
+            // If we can access the features, then get them!
+            LArMvaHelper::MvaFeatureVector featureVector;
+            sliceFeatures.GetFeatureVector(featureVector);
+
+            // ATTN have to match the order filled!
+            if (featureVector.size() != 10)
+                throw StatusCodeException(STATUS_CODE_FAILURE);
+
+            const float nuNFinalStatePfos = featureVector.at(0).Get();
+            const float nuNHitsTotal = featureVector.at(1).Get();
+            const float nuVertexY = featureVector.at(2).Get();
+            const float nuWeightedDirZ = featureVector.at(3).Get();
+            const float nuNSpacePointsInSphere = featureVector.at(4).Get();
+            const float nuEigenRatioInSphere = featureVector.at(5).Get();
+            const float crLongestTrackDirY = featureVector.at(6).Get();
+            const float crLongestTrackDeflection = featureVector.at(7).Get();
+            const float crFracHitsInLongestTrack = featureVector.at(8).Get();
+            const float nCRHitsMax = featureVector.at(9).Get();
+
+            m_event.s_nuNFinalStatePfos.push_back(nuNFinalStatePfos);
+            m_event.s_nuNHitsTotal.push_back(nuNHitsTotal);
+            m_event.s_nuVertexY.push_back(nuVertexY);
+            m_event.s_nuWeightedDirZ.push_back(nuWeightedDirZ);
+            m_event.s_nuNSpacePointsInSphere.push_back(nuNSpacePointsInSphere);
+            m_event.s_nuEigenRatioInSphere.push_back(nuEigenRatioInSphere);
+            m_event.s_crLongestTrackDirY.push_back(crLongestTrackDirY);
+            m_event.s_crLongestTrackDeflection.push_back(crLongestTrackDeflection);
+            m_event.s_crFracHitsInLongestTrack.push_back(crFracHitsInLongestTrack);
+            m_event.s_nCRHitsMax.push_back(nCRHitsMax);
+        }
+        else
+        {
+            // Features aren't available so set dummy values
+            m_event.s_nuNFinalStatePfos.push_back(-std::numeric_limits<float>::max());
+            m_event.s_nuNHitsTotal.push_back(-std::numeric_limits<float>::max());
+            m_event.s_nuVertexY.push_back(-std::numeric_limits<float>::max());
+            m_event.s_nuWeightedDirZ.push_back(-std::numeric_limits<float>::max());
+            m_event.s_nuNSpacePointsInSphere.push_back(-std::numeric_limits<float>::max());
+            m_event.s_nuEigenRatioInSphere.push_back(-std::numeric_limits<float>::max());
+            m_event.s_crLongestTrackDirY.push_back(-std::numeric_limits<float>::max());
+            m_event.s_crLongestTrackDeflection.push_back(-std::numeric_limits<float>::max());
+            m_event.s_crFracHitsInLongestTrack.push_back(-std::numeric_limits<float>::max());
+            m_event.s_nCRHitsMax.push_back(-std::numeric_limits<float>::max());
+        }
+
+        // Get the neutrino-vs-cosmic score
+        const auto score = sliceFeatures.GetNeutrinoProbability(m_supportVectorMachine);
+        m_event.s_score.push_back(score);
+    }
+
+    // Fill the tree!
+    m_pTree->Fill();
+
+    //// END HACK ==========================================================================================================================
+
     this->SelectPfosByProbability(pAlgorithm, nuSliceHypotheses, crSliceHypotheses, sliceFeaturesVector, selectedPfos);
+}
+
+//------------------------------------------------------------------------------------------------------------------------------------------
+
+void NeutrinoIdTool::ResetOutputEvent()
+{
+    // Set dummy values
+    m_event.truth_hasNu = false;
+    m_event.truth_nuPdgCode = -std::numeric_limits<int>::max();
+    m_event.truth_nuEnergy = -std::numeric_limits<float>::max();
+    m_event.truth_nuVertexX = -std::numeric_limits<float>::max();
+    m_event.truth_nuVertexY = -std::numeric_limits<float>::max();
+    m_event.truth_nuVertexZ = -std::numeric_limits<float>::max();
+
+    m_event.nHitsU = -std::numeric_limits<int>::max();
+    m_event.nHitsV = -std::numeric_limits<int>::max();
+    m_event.nHitsW = -std::numeric_limits<int>::max();
+
+    m_event.nNuHitsU = -std::numeric_limits<int>::max();
+    m_event.nNuHitsV = -std::numeric_limits<int>::max();
+    m_event.nNuHitsW = -std::numeric_limits<int>::max();
+
+    m_event.p_truth_id.clear();
+    m_event.p_truth_pdgCode.clear();
+    m_event.p_truth_energy.clear();
+    m_event.p_truth_momentumX.clear();
+    m_event.p_truth_momentumY.clear();
+    m_event.p_truth_momentumZ.clear();
+    m_event.p_truth_startX.clear();
+    m_event.p_truth_startY.clear();
+    m_event.p_truth_startZ.clear();
+    m_event.p_truth_endX.clear();
+    m_event.p_truth_endY.clear();
+    m_event.p_truth_endZ.clear();
+    m_event.p_truth_nHitsU.clear();
+    m_event.p_truth_nHitsV.clear();
+    m_event.p_truth_nHitsW.clear();
+    m_event.s_nHitsU.clear();
+    m_event.s_nHitsV.clear();
+    m_event.s_nHitsW.clear();
+    m_event.s_nNuHitsU.clear();
+    m_event.s_nNuHitsV.clear();
+    m_event.s_nNuHitsW.clear();
+    m_event.s_areFeaturesAvailable.clear();
+    m_event.s_nuNFinalStatePfos.clear();
+    m_event.s_nuNHitsTotal.clear();
+    m_event.s_nuVertexY.clear();
+    m_event.s_nuWeightedDirZ.clear();
+    m_event.s_nuNSpacePointsInSphere.clear();
+    m_event.s_nuEigenRatioInSphere.clear();
+    m_event.s_crLongestTrackDirY.clear();
+    m_event.s_crLongestTrackDeflection.clear();
+    m_event.s_crFracHitsInLongestTrack.clear();
+    m_event.s_nCRHitsMax.clear();
+    m_event.s_score.clear();
+}
+
+//------------------------------------------------------------------------------------------------------------------------------------------
+
+void NeutrinoIdTool::CollectHitsInSlice(const PfoList &nuSliceHypothesis, const PfoList &crSliceHypothesis, CaloHitList &caloHitList) const
+{
+    // Collect up all reconstructed particles in the slice under both hypotheses
+    PfoList downstreamPfos;
+    LArPfoHelper::GetAllDownstreamPfos(nuSliceHypothesis, downstreamPfos);
+    LArPfoHelper::GetAllDownstreamPfos(crSliceHypothesis, downstreamPfos);
+
+    // Collect up the hits in each view
+    CaloHitList collectedHits;
+    LArPfoHelper::GetCaloHits(downstreamPfos, TPC_VIEW_U, collectedHits);
+    LArPfoHelper::GetCaloHits(downstreamPfos, TPC_VIEW_V, collectedHits);
+    LArPfoHelper::GetCaloHits(downstreamPfos, TPC_VIEW_W, collectedHits);
+
+    // ATTN the hits from the slice hypotheses are copies of those from the master algorithm, so we need to get their parent. These can be
+    // repeated because we reconstruct everything twice, so we have to check for double counting
+    for (const auto &pCaloHit : collectedHits)
+    {
+        const auto pParentHit = static_cast<const CaloHit *const>(pCaloHit->GetParentAddress());
+
+        if (!pParentHit)
+            throw StatusCodeException(STATUS_CODE_FAILURE);
+
+        if (std::find(caloHitList.begin(), caloHitList.end(), pParentHit) == caloHitList.end())
+            caloHitList.push_back(pParentHit);
+    }
 }
 
 //------------------------------------------------------------------------------------------------------------------------------------------
@@ -169,20 +501,29 @@ void NeutrinoIdTool::Collect2DHits(const PfoList &pfos, CaloHitList &reconstruct
 
 unsigned int NeutrinoIdTool::CountNeutrinoInducedHits(const CaloHitList &caloHitList) const
 {
-    unsigned int nNuHits(0);
+    CaloHitList neutrinoHits;
+    this->GetNeutrinoInducedHits(caloHitList, neutrinoHits);
+
+    return neutrinoHits.size();
+}
+
+//------------------------------------------------------------------------------------------------------------------------------------------
+
+void NeutrinoIdTool::GetNeutrinoInducedHits(const CaloHitList &caloHitList, CaloHitList &neutrinoHits) const
+{
     for (const CaloHit *const pCaloHit : caloHitList)
     {
         try
         {
             if (LArMCParticleHelper::IsNeutrino(LArMCParticleHelper::GetParentMCParticle(MCParticleHelper::GetMainMCParticle(pCaloHit))))
-                nNuHits++;
+            {
+                neutrinoHits.push_back(pCaloHit);
+            }
         }
         catch (const StatusCodeException &)
         {
         }
     }
-
-    return nNuHits;
 }
 
 //------------------------------------------------------------------------------------------------------------------------------------------

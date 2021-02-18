@@ -13,6 +13,7 @@
 #include "larpandoracontent/LArHelpers/LArClusterHelper.h"
 #include "larpandoracontent/LArHelpers/LArPfoHelper.h"
 #include "larpandoracontent/LArHelpers/LArMCParticleHelper.h"
+#include "larpandoracontent/LArHelpers/LArMonitoringHelper.h"
 
 #include "larpandoracontent/LArObjects/LArCaloHit.h"
 
@@ -78,6 +79,7 @@ StatusCode CosmicRayTaggingTool::Initialize()
     m_pFile = std::make_shared<TFile>("crTagging.root", "RECREATE");
     m_pTree = std::make_shared<TTree>("events", "events");
 
+    m_pTree->Branch("truth_hasNu", &m_event.truth_hasNu);
     m_pTree->Branch("truth_nuPdgCode", &m_event.truth_nuPdgCode);
     m_pTree->Branch("truth_nuEnergy", &m_event.truth_nuEnergy);
     m_pTree->Branch("truth_nuVertexX", &m_event.truth_nuVertexX);
@@ -89,6 +91,12 @@ StatusCode CosmicRayTaggingTool::Initialize()
     m_pTree->Branch("p_truth_momentumX", &m_event.p_truth_momentumX);
     m_pTree->Branch("p_truth_momentumY", &m_event.p_truth_momentumY);
     m_pTree->Branch("p_truth_momentumZ", &m_event.p_truth_momentumZ);
+    m_pTree->Branch("p_truth_startX", &m_event.p_truth_startX);
+    m_pTree->Branch("p_truth_startY", &m_event.p_truth_startY);
+    m_pTree->Branch("p_truth_startZ", &m_event.p_truth_startZ);
+    m_pTree->Branch("p_truth_endX", &m_event.p_truth_endX);
+    m_pTree->Branch("p_truth_endY", &m_event.p_truth_endY);
+    m_pTree->Branch("p_truth_endZ", &m_event.p_truth_endZ);
     m_pTree->Branch("p_truth_nHitsU", &m_event.p_truth_nHitsU);
     m_pTree->Branch("p_truth_nHitsV", &m_event.p_truth_nHitsV);
     m_pTree->Branch("p_truth_nHitsW", &m_event.p_truth_nHitsW);
@@ -109,9 +117,10 @@ StatusCode CosmicRayTaggingTool::Initialize()
     m_pTree->Branch("p_reco_inTime", &m_event.p_reco_inTime);
     m_pTree->Branch("p_reco_isContained", &m_event.p_reco_isContained);
     m_pTree->Branch("p_reco_isTopToBottom", &m_event.p_reco_isTopToBottom);
+    m_pTree->Branch("p_reco_inNuSlice", &m_event.p_reco_inNuSlice);
+    m_pTree->Branch("p_reco_isCRTagged", &m_event.p_reco_isCRTagged);
     m_pTree->Branch("p_reco_sliceId", &m_event.p_reco_sliceId);
     m_pTree->Branch("p_reco_linkedIds", &m_event.p_reco_linkedIds);
-    m_pTree->Branch("p_reco_inNuSlice", &m_event.p_reco_inNuSlice);
     m_pTree->Branch("p_reco_match_ids", &m_event.p_reco_match_ids);
     m_pTree->Branch("p_reco_match_hitsU", &m_event.p_reco_match_hitsU);
     m_pTree->Branch("p_reco_match_hitsV", &m_event.p_reco_match_hitsV);
@@ -180,7 +189,7 @@ void CosmicRayTaggingTool::FindAmbiguousPfos(const PfoList &parentCosmicRayPfos,
     PfoToBoolMap pfoToIsLikelyCRMuonMap;
     this->TagCRMuons(candidates, pfoToInTimeMap, pfoToIsTopToBottomMap, neutrinoSliceSet, pfoToIsLikelyCRMuonMap);
 
-    //// BEGIN DEBUG
+    //// BEGIN HACK ========================================================================================================================
 
     // Reset the output event so we can fill it again
     this->ResetOutputEvent();
@@ -189,11 +198,47 @@ void CosmicRayTaggingTool::FindAmbiguousPfos(const PfoList &parentCosmicRayPfos,
     const MCParticleList *pMCParticleList = nullptr;
     PANDORA_THROW_RESULT_IF(STATUS_CODE_SUCCESS, !=, PandoraContentApi::GetCurrentList(*pAlgorithm, pMCParticleList));
 
+    // Find the true neutrino (if it exists)
+    MCParticleVector trueNeutrinos;
+    LArMCParticleHelper::GetTrueNeutrinos(pMCParticleList, trueNeutrinos);
+
+    // We have a true neutrino
+    if (!trueNeutrinos.empty())
+    {
+        m_event.truth_hasNu = true;
+
+        // If we have multiple neutrinos then find the one with the largest energy (shouldn't happen often - if ever depending on the sample)
+        const MCParticle *pSelectedNeutrino = trueNeutrinos.front();
+        for (const auto &pNeutrino : trueNeutrinos)
+        {
+            if (pNeutrino->GetEnergy() > pSelectedNeutrino->GetEnergy())
+            {
+                pSelectedNeutrino = pNeutrino;
+            }
+        }
+
+        // Set the neutrino information
+        m_event.truth_nuPdgCode = pSelectedNeutrino->GetParticleId();
+        m_event.truth_nuEnergy = pSelectedNeutrino->GetEnergy();
+
+        const auto nuVertex = pSelectedNeutrino->GetVertex();
+        m_event.truth_nuVertexX = nuVertex.GetX();
+        m_event.truth_nuVertexY = nuVertex.GetY();
+        m_event.truth_nuVertexZ = nuVertex.GetZ();
+    }
+    // We don't have a true neutrino
+    else
+    {
+        m_event.truth_hasNu = false;
+    }
+
     // Get the hits
     const CaloHitList *pCaloHitList = nullptr;
     PANDORA_THROW_RESULT_IF(STATUS_CODE_SUCCESS, !=, PandoraContentApi::GetList(*pAlgorithm, "CaloHitList2D", pCaloHitList));
 
     // Identify neutrino induced MCParticles, and get mappings to their hits
+    // ATTN here we have some requirement that the MCParticles are "reconstructable" - I think there's an implicit assumption that the
+    // MCParticle produces at least one hit... so not quite the same as all MCParticles
     LArMCParticleHelper::MCContributionMap nuMCParticlesToGoodHitsMap;
 
     LArMCParticleHelper::PrimaryParameters parameters;
@@ -201,6 +246,45 @@ void CosmicRayTaggingTool::FindAmbiguousPfos(const PfoList &parentCosmicRayPfos,
     parameters.m_minHitsForGoodView = 0;
     parameters.m_minPrimaryGoodViews = 0;
     LArMCParticleHelper::SelectReconstructableMCParticles(pMCParticleList, pCaloHitList, parameters, LArMCParticleHelper::IsBeamNeutrinoFinalState, nuMCParticlesToGoodHitsMap);
+
+    // Save the information about the neutrino induced MCParticles
+    // First, put them in an ordered container and sort them for reproducibility
+    MCParticleVector nuMCParticles;
+    LArMonitoringHelper::GetOrderedMCParticleVector({nuMCParticlesToGoodHitsMap}, nuMCParticles);
+
+    // Fill the MCParticle info
+    std::unordered_map<const MCParticle *, int> mcParticleIdMap;
+    for (size_t id = 0; id < nuMCParticles.size(); ++id)
+    {
+        const auto &pMCParticle = nuMCParticles.at(id);
+
+        // Make a mapping from the MCParticle to the unique ID for later use
+        mcParticleIdMap.emplace(pMCParticle, id);
+        m_event.p_truth_id.push_back(id);
+
+        m_event.p_truth_pdgCode.push_back(pMCParticle->GetParticleId());
+        m_event.p_truth_energy.push_back(pMCParticle->GetEnergy());
+
+        const auto momentum = pMCParticle->GetMomentum();
+        m_event.p_truth_momentumX.push_back(momentum.GetX());
+        m_event.p_truth_momentumY.push_back(momentum.GetY());
+        m_event.p_truth_momentumZ.push_back(momentum.GetZ());
+
+        const auto start = pMCParticle->GetVertex();
+        m_event.p_truth_startX.push_back(start.GetX());
+        m_event.p_truth_startY.push_back(start.GetY());
+        m_event.p_truth_startZ.push_back(start.GetZ());
+
+        const auto end = pMCParticle->GetEndpoint();
+        m_event.p_truth_endX.push_back(end.GetX());
+        m_event.p_truth_endY.push_back(end.GetY());
+        m_event.p_truth_endZ.push_back(end.GetZ());
+
+        const auto hits = nuMCParticlesToGoodHitsMap.at(pMCParticle);
+        m_event.p_truth_nHitsU.push_back(LArMonitoringHelper::CountHitsByType(TPC_VIEW_U, hits));
+        m_event.p_truth_nHitsV.push_back(LArMonitoringHelper::CountHitsByType(TPC_VIEW_V, hits));
+        m_event.p_truth_nHitsW.push_back(LArMonitoringHelper::CountHitsByType(TPC_VIEW_W, hits));
+    }
 
     // Get the hit sharing maps between Pfos and these primary MCParticles
     LArMCParticleHelper::MCContributionMapVector mcParticlesToGoodHitsMaps({nuMCParticlesToGoodHitsMap});
@@ -211,99 +295,125 @@ void CosmicRayTaggingTool::FindAmbiguousPfos(const PfoList &parentCosmicRayPfos,
     LArMCParticleHelper::MCParticleToPfoHitSharingMap mcParticleToPfoHitSharingMap;
     LArMCParticleHelper::GetPfoMCParticleHitSharingMaps(pfoToReconstructable2DHitsMap, mcParticlesToGoodHitsMaps, pfoToMCParticleHitSharingMap, mcParticleToPfoHitSharingMap);
 
+    // Get an ordered PFO vector so we can assigned a unique ID to each
+    PfoVector orderedPfoVector;
     for (const auto &candidate : candidates)
     {
-        std::cout << "CR candidate" << std::endl;
-        std::cout << " - PFO:       " << candidate.m_pPfo << std::endl;
+        orderedPfoVector.push_back(candidate.m_pPfo);
+    }
+
+    // Sort by the number of hits
+    std::sort(orderedPfoVector.begin(), orderedPfoVector.end(), LArPfoHelper::SortByNHits);
+
+    // Make a mapping from PFO to its ID
+    std::unordered_map<const ParticleFlowObject *, int> pfoIdMap;
+    for (size_t id = 0; id < orderedPfoVector.size(); ++id)
+    {
+        pfoIdMap.emplace(orderedPfoVector.at(id), id);
+    }
+
+    // Save the information about the reco particles
+    for (const auto &candidate : candidates)
+    {
+        m_event.p_reco_id.push_back(pfoIdMap.at(candidate.m_pPfo));
 
         // Get the downstream PFOs
         PfoList downstreamPfos;
         LArPfoHelper::GetAllDownstreamPfos(candidate.m_pPfo, downstreamPfos);
 
         // Get the hits in this PFO (and it's daughters)
-        CaloHitList pfoHits;
-        LArPfoHelper::GetCaloHits(downstreamPfos, TPC_VIEW_U, pfoHits);
-        LArPfoHelper::GetCaloHits(downstreamPfos, TPC_VIEW_V, pfoHits);
-        LArPfoHelper::GetCaloHits(downstreamPfos, TPC_VIEW_W, pfoHits);
-        LArPfoHelper::GetIsolatedCaloHits(downstreamPfos, TPC_VIEW_U, pfoHits);
-        LArPfoHelper::GetIsolatedCaloHits(downstreamPfos, TPC_VIEW_V, pfoHits);
-        LArPfoHelper::GetIsolatedCaloHits(downstreamPfos, TPC_VIEW_W, pfoHits);
+        CaloHitList pfoHitsU;
+        LArPfoHelper::GetCaloHits(downstreamPfos, TPC_VIEW_U, pfoHitsU);
+        LArPfoHelper::GetIsolatedCaloHits(downstreamPfos, TPC_VIEW_U, pfoHitsU);
+        m_event.p_reco_nHitsU.push_back(pfoHitsU.size());
 
-        // Get the hits that come from a neutrino induced particle
-        const auto pfoHitsFromNu = pfoToReconstructable2DHitsMap.at(candidate.m_pPfo);
+        CaloHitList pfoHitsV;
+        LArPfoHelper::GetCaloHits(downstreamPfos, TPC_VIEW_V, pfoHitsV);
+        LArPfoHelper::GetIsolatedCaloHits(downstreamPfos, TPC_VIEW_V, pfoHitsV);
+        m_event.p_reco_nHitsV.push_back(pfoHitsV.size());
 
-        if (pfoHits.empty())
-            throw StatusCodeException(STATUS_CODE_OUT_OF_RANGE);
+        CaloHitList pfoHitsW;
+        LArPfoHelper::GetCaloHits(downstreamPfos, TPC_VIEW_W, pfoHitsW);
+        LArPfoHelper::GetIsolatedCaloHits(downstreamPfos, TPC_VIEW_W, pfoHitsW);
+        m_event.p_reco_nHitsW.push_back(pfoHitsW.size());
 
-        const auto nuPurity = static_cast<float>(pfoHitsFromNu.size()) / static_cast<float>(pfoHits.size());
-
-        std::cout << " - Hits:      " << pfoHits.size() << std::endl;
-        std::cout << " - Nu hits:   " << pfoHitsFromNu.size() << std::endl;
-        std::cout << " - Nu purity: " << nuPurity << std::endl;
-        std::cout << " - Slice:     " << candidate.m_sliceId << std::endl;
-        std::cout << " - Can fit?   " << candidate.m_canFit << std::endl;
-
+        // Get the fitted track information
+        m_event.p_reco_canFit.push_back(candidate.m_canFit);
         if (candidate.m_canFit)
         {
-            std::cout << " - End 1:     " << candidate.m_endPoint1.GetX() << ", " << candidate.m_endPoint1.GetY() << ", " << candidate.m_endPoint1.GetZ() << std::endl;
-            std::cout << " - End 2:     " << candidate.m_endPoint2.GetX() << ", " << candidate.m_endPoint2.GetY() << ", " << candidate.m_endPoint2.GetZ() << std::endl;
-            std::cout << " - Length:    " << candidate.m_length << std::endl;
-            std::cout << " - Curvature: " << candidate.m_curvature << std::endl;
-            std::cout << " - Theta:     " << candidate.m_theta << std::endl;
+            m_event.p_reco_end1X.push_back(candidate.m_endPoint1.GetX());
+            m_event.p_reco_end1Y.push_back(candidate.m_endPoint1.GetY());
+            m_event.p_reco_end1Z.push_back(candidate.m_endPoint1.GetZ());
+
+            m_event.p_reco_end2X.push_back(candidate.m_endPoint2.GetX());
+            m_event.p_reco_end2Y.push_back(candidate.m_endPoint2.GetY());
+            m_event.p_reco_end2Z.push_back(candidate.m_endPoint2.GetZ());
+
+            m_event.p_reco_length.push_back(candidate.m_length);
+            m_event.p_reco_cosTheta.push_back(candidate.m_theta);
+            m_event.p_reco_curvature.push_back(candidate.m_curvature);
         }
-
-        std::cout << " - In time?   " << pfoToInTimeMap.at(candidate.m_pPfo) << std::endl;
-        std::cout << " - Contained? " << pfoToIsContainedMap.at(candidate.m_pPfo) << std::endl;
-        std::cout << " - Top-Bot?   " << pfoToIsTopToBottomMap.at(candidate.m_pPfo) << std::endl;
-        std::cout << " - Nu slice?  " << neutrinoSliceSet.count(candidate.m_sliceId) << std::endl;
-
-        // ATTN in the logic, we technically require all PFOs in the slice to be in time for the slice to be likely neutrino
-        const bool likelyNeutrino(candidate.m_canFit && pfoToInTimeMap.at(candidate.m_pPfo) && (candidate.m_theta < m_maxNeutrinoCosTheta || pfoToIsContainedMap.at(candidate.m_pPfo)));
-        std::cout << " - Likely nu? " << likelyNeutrino << std::endl;
-        std::cout << " - CR tagged? " << pfoToIsLikelyCRMuonMap.at(candidate.m_pPfo) << std::endl;
-
-        // Print the MC info
-        std::cout << " - Matched MCParticles:" << std::endl;
-        const auto iter = pfoToMCParticleHitSharingMap.find(candidate.m_pPfo);
-        if (iter == pfoToMCParticleHitSharingMap.end())
-            continue;
-
-        float totalPurity = 0.f;
-        float significance = 0.f;
-
-        const auto mcParticleHitPairs = iter->second;
-        for (const auto &[pMCParticle, sharedHits] : mcParticleHitPairs)
+        else
         {
-            std::cout << "    - " << pMCParticle << std::endl;
-            std::cout << "      - PDG:          " << pMCParticle->GetParticleId() << std::endl;
-            std::cout << "      - Energy:       " << pMCParticle->GetEnergy() << std::endl;
-
-            const auto mcParticleHits = nuMCParticlesToGoodHitsMap.at(pMCParticle);
-            std::cout << "      - Hits:         " << mcParticleHits.size() << std::endl;
-            std::cout << "      - Shared:       " << sharedHits.size() << std::endl;
-
-            // Get the purity and completeness of the match
-            const auto matchPurity = static_cast<float>(sharedHits.size()) / static_cast<float>(pfoHits.size());
-            std::cout << "      - Purity:       " << matchPurity << std::endl;
-
-            if (mcParticleHits.empty())
-                throw StatusCodeException(STATUS_CODE_OUT_OF_RANGE);
-
-            const auto matchCompleteness = static_cast<float>(sharedHits.size()) / static_cast<float>(mcParticleHits.size());
-            std::cout << "      - Completeness: " << matchCompleteness << std::endl;
-
-            totalPurity += matchPurity;
-            significance += matchCompleteness;
+            // Store dummy track info
+            m_event.p_reco_end1X.push_back(-std::numeric_limits<float>::max());
+            m_event.p_reco_end1Y.push_back(-std::numeric_limits<float>::max());
+            m_event.p_reco_end1Z.push_back(-std::numeric_limits<float>::max());
+            m_event.p_reco_end2X.push_back(-std::numeric_limits<float>::max());
+            m_event.p_reco_end2Y.push_back(-std::numeric_limits<float>::max());
+            m_event.p_reco_end2Z.push_back(-std::numeric_limits<float>::max());
+            m_event.p_reco_length.push_back(-std::numeric_limits<float>::max());
+            m_event.p_reco_cosTheta.push_back(-std::numeric_limits<float>::max());
+            m_event.p_reco_curvature.push_back(-std::numeric_limits<float>::max());
         }
 
-        std::cout << " - Nu purity  " << totalPurity << std::endl;
-        std::cout << " - Nu signif  " << significance << std::endl;
-        std::cout << "------------------------------------------------" << std::endl;
+        // Store the results of each of the "cuts"
+        m_event.p_reco_inTime.push_back(pfoToInTimeMap.at(candidate.m_pPfo));
+        m_event.p_reco_isContained.push_back(pfoToIsContainedMap.at(candidate.m_pPfo));
+        m_event.p_reco_isTopToBottom.push_back(pfoToIsTopToBottomMap.at(candidate.m_pPfo));
+        m_event.p_reco_inNuSlice.push_back(neutrinoSliceSet.count(candidate.m_sliceId) != 0);
+        m_event.p_reco_isCRTagged.push_back(pfoToIsLikelyCRMuonMap.at(candidate.m_pPfo));
+
+        // Store the associations to other PFOs
+        m_event.p_reco_sliceId.push_back(candidate.m_sliceId);
+
+        std::vector<int> linkedIds;
+        const auto assocPfosIter = pfoAssociationMap.find(candidate.m_pPfo);
+        if (assocPfosIter != pfoAssociationMap.end())
+        {
+            for (const auto &pLinkedPfo : assocPfosIter->second)
+            {
+                linkedIds.push_back(pfoIdMap.at(pLinkedPfo));
+            }
+        }
+        m_event.p_reco_linkedIds.push_back(linkedIds);
+
+        // Store the reco-truth matching information
+        const auto assocMCIter = pfoToMCParticleHitSharingMap.find(candidate.m_pPfo);
+
+        std::vector<int> matchIds, matchHitsU, matchHitsV, matchHitsW;
+        if (assocMCIter != pfoToMCParticleHitSharingMap.end())
+        {
+            const auto mcParticleHitPairs = assocMCIter->second;
+            for (const auto &[pMCParticle, sharedHits] : mcParticleHitPairs)
+            {
+                matchIds.push_back(mcParticleIdMap.at(pMCParticle));
+                matchHitsU.push_back(LArMonitoringHelper::CountHitsByType(TPC_VIEW_U, sharedHits));
+                matchHitsV.push_back(LArMonitoringHelper::CountHitsByType(TPC_VIEW_V, sharedHits));
+                matchHitsW.push_back(LArMonitoringHelper::CountHitsByType(TPC_VIEW_W, sharedHits));
+            }
+        }
+
+        m_event.p_reco_match_ids.push_back(matchIds);
+        m_event.p_reco_match_hitsU.push_back(matchHitsU);
+        m_event.p_reco_match_hitsV.push_back(matchHitsV);
+        m_event.p_reco_match_hitsW.push_back(matchHitsW);
     }
 
     // Fill the tree!
     m_pTree->Fill();
-    //// END DEBUG
+
+    //// END HACK ==========================================================================================================================
 
     for (const ParticleFlowObject *const pPfo : parentCosmicRayPfos)
     {
@@ -317,6 +427,7 @@ void CosmicRayTaggingTool::FindAmbiguousPfos(const PfoList &parentCosmicRayPfos,
 void CosmicRayTaggingTool::ResetOutputEvent()
 {
     // Set dummy values
+    m_event.truth_hasNu = false;
     m_event.truth_nuPdgCode = -std::numeric_limits<int>::max();
     m_event.truth_nuEnergy = -std::numeric_limits<float>::max();
     m_event.truth_nuVertexX = -std::numeric_limits<float>::max();
@@ -330,6 +441,12 @@ void CosmicRayTaggingTool::ResetOutputEvent()
     m_event.p_truth_momentumX.clear();
     m_event.p_truth_momentumY.clear();
     m_event.p_truth_momentumZ.clear();
+    m_event.p_truth_startX.clear();
+    m_event.p_truth_startY.clear();
+    m_event.p_truth_startZ.clear();
+    m_event.p_truth_endX.clear();
+    m_event.p_truth_endY.clear();
+    m_event.p_truth_endZ.clear();
     m_event.p_truth_nHitsU.clear();
     m_event.p_truth_nHitsV.clear();
     m_event.p_truth_nHitsW.clear();
@@ -350,9 +467,10 @@ void CosmicRayTaggingTool::ResetOutputEvent()
     m_event.p_reco_inTime.clear();
     m_event.p_reco_isContained.clear();
     m_event.p_reco_isTopToBottom.clear();
+    m_event.p_reco_inNuSlice.clear();
+    m_event.p_reco_isCRTagged.clear();
     m_event.p_reco_sliceId.clear();
     m_event.p_reco_linkedIds.clear();
-    m_event.p_reco_inNuSlice.clear();
     m_event.p_reco_match_ids.clear();
     m_event.p_reco_match_hitsU.clear();
     m_event.p_reco_match_hitsV.clear();

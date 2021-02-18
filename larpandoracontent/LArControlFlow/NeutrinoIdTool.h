@@ -13,6 +13,9 @@
 #include "larpandoracontent/LArObjects/LArSupportVectorMachine.h"
 
 #include <functional>
+#include <memory>
+#include <TFile.h>
+#include <TTree.h>
 
 namespace lar_content
 {
@@ -34,6 +37,11 @@ public:
      *  @brief  Default constructor
      */
     NeutrinoIdTool();
+
+    /**
+    *  @brief  Destructor
+    */
+    ~NeutrinoIdTool();
 
     void SelectOutputPfos(const pandora::Algorithm *const pAlgorithm, const SliceHypotheses &nuSliceHypotheses, const SliceHypotheses &crSliceHypotheses, pandora::PfoList &selectedPfos);
 
@@ -77,6 +85,7 @@ private:
         float GetNeutrinoProbability(const SupportVectorMachine &supportVectorMachine) const;
 
     private:
+
         /**
          *  @brief  Get the recontructed neutrino the input list of neutrino Pfos
          *
@@ -149,6 +158,15 @@ private:
     typedef std::vector<SliceFeatures> SliceFeaturesVector;
 
     /**
+    *  @brief  Collect up the calo hits in a given slice (the hits returned are those from the master algorithm)
+    *
+    *  @param  nuSliceHypothesis the neutrino slice hypothesis
+    *  @param  crSliceHypothesis the cosmic-ray slice hypothesis
+    *  @param  caloHitList the output list of hits in the slice
+    */
+    void CollectHitsInSlice(const pandora::PfoList &nuSliceHypothesis, const pandora::PfoList &crSliceHypothesis, pandora::CaloHitList &caloHitList) const;
+
+    /**
      *  @brief  Get the features of each slice
      *
      *  @param  pTool the address of the this NeutrinoId tool
@@ -200,6 +218,14 @@ private:
     unsigned int CountNeutrinoInducedHits(const pandora::CaloHitList &caloHitList) const;
 
     /**
+    *  @brief  Get the neutrino induced hits in the input list
+    *
+    *  @param  caloHitList input list of calo hits
+    *  @param  neutrinoHits the output list of neutrino induced hits
+    */
+    void GetNeutrinoInducedHits(const pandora::CaloHitList &caloHitList, pandora::CaloHitList &neutrinoHits) const;
+
+    /**
      *  @brief  Use the current MCParticle list to get the nuance code of the neutrino in the event
      *
      *  @param  pAlgorithm address of the master algorithm
@@ -236,6 +262,11 @@ private:
      */
     void SelectPfos(const pandora::PfoList &pfos, pandora::PfoList &selectedPfos) const;
 
+    /**
+    *  @brief  Reset the output event object
+    */
+    void ResetOutputEvent();
+
     pandora::StatusCode ReadSettings(const pandora::TiXmlHandle xmlHandle);
 
     // Training
@@ -252,6 +283,75 @@ private:
 
     SupportVectorMachine  m_supportVectorMachine;         ///< The support vector machine
     std::string           m_filePathEnvironmentVariable;  ///< The environment variable providing a list of paths to svm files
+
+    std::shared_ptr<TFile> m_pFile;             ///< The output root file
+    std::shared_ptr<TTree> m_pTree;             ///< The output root tree
+
+    /**
+    *  @brief  The output event structure
+    */
+    struct OutputEvent
+    {
+        // Information about the true neutrino
+        bool  truth_hasNu;      ///< If we have a neutrino in truth
+        int   truth_nuPdgCode;  ///< The neutrino PDG code
+        float truth_nuEnergy;   ///< The neutrino energy
+        float truth_nuVertexX;  ///< The x-component of the neutrino vertex
+        float truth_nuVertexY;  ///< The y-component of the neutrino vertex
+        float truth_nuVertexZ;  ///< The z-component of the neutrino vertex
+
+        // Information about a truth (final state) particle
+        std::vector<int>   p_truth_id;        ///< A unique identifier for the truth particle
+        std::vector<int>   p_truth_pdgCode;   ///< The PDG code
+        std::vector<float> p_truth_energy;    ///< The energy
+        std::vector<float> p_truth_momentumX; ///< The x-component of the momentum
+        std::vector<float> p_truth_momentumY; ///< The y-component of the momentum
+        std::vector<float> p_truth_momentumZ; ///< The z-component of the momentum
+        std::vector<float> p_truth_startX;    ///< The x-component of the start position
+        std::vector<float> p_truth_startY;    ///< The y-component of the start position
+        std::vector<float> p_truth_startZ;    ///< The z-component of the start position
+        std::vector<float> p_truth_endX;      ///< The x-component of the end position
+        std::vector<float> p_truth_endY;      ///< The y-component of the end position
+        std::vector<float> p_truth_endZ;      ///< The z-component of the end position
+        std::vector<int>   p_truth_nHitsU;    ///< The number of hits in the U view
+        std::vector<int>   p_truth_nHitsV;    ///< The number of hits in the V view
+        std::vector<int>   p_truth_nHitsW;    ///< The number of hits in the W view
+
+        // Information about the hits in the event
+        int nHitsU; ///< The total number of hits in the event in the U view
+        int nHitsV; ///< The total number of hits in the event in the V view
+        int nHitsW; ///< The total number of hits in the event in the W view
+
+        int nNuHitsU; ///< The total number of neutrino induced hits in the event in the U view
+        int nNuHitsV; ///< The total number of neutrino induced hits in the event in the V view
+        int nNuHitsW; ///< The total number of neutrino induced hits in the event in the W view
+
+        // Information about the slices
+        std::vector<int> s_nHitsU;  ///< The number of hits in the slice in the U view
+        std::vector<int> s_nHitsV;  ///< The number of hits in the slice in the V view
+        std::vector<int> s_nHitsW;  ///< The number of hits in the slice in the W view
+
+        std::vector<int> s_nNuHitsU;  ///< The number of neutrino induced hits in the slice in the U view
+        std::vector<int> s_nNuHitsV;  ///< The number of neutrino induced hits in the slice in the V view
+        std::vector<int> s_nNuHitsW;  ///< The number of neutrino induced hits in the slice in the W view
+
+        // The features that go into the SVM
+        std::vector<bool>  s_areFeaturesAvailable;
+        std::vector<float> s_nuNFinalStatePfos;
+        std::vector<float> s_nuNHitsTotal;
+        std::vector<float> s_nuVertexY;
+        std::vector<float> s_nuWeightedDirZ;
+        std::vector<float> s_nuNSpacePointsInSphere;
+        std::vector<float> s_nuEigenRatioInSphere;
+        std::vector<float> s_crLongestTrackDirY;
+        std::vector<float> s_crLongestTrackDeflection;
+        std::vector<float> s_crFracHitsInLongestTrack;
+        std::vector<float> s_nCRHitsMax;
+
+        std::vector<float> s_score; ///< The SVM response
+    };
+
+    OutputEvent m_event; ///< The output event
 };
 
 } // namespace lar_content
