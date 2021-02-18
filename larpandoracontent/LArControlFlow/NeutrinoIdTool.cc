@@ -72,6 +72,30 @@ void NeutrinoIdTool::SelectOutputPfos(const Algorithm *const pAlgorithm, const S
     }
 
     this->SelectPfosByProbability(pAlgorithm, nuSliceHypotheses, crSliceHypotheses, sliceFeaturesVector, selectedPfos);
+
+    //// BEGIN MONITORING
+
+    // Split up the input list of PFOs into those that have and haven't been identified as a neutrino
+    PfoList nuPfos, crPfos;
+    for (const ParticleFlowObject *const pPfo : selectedPfos)
+    {
+        if (LArPfoHelper::GetPrimaryNeutrino(pPfo) != 0)
+        {
+            nuPfos.push_back(pPfo);
+        }
+        else
+        {
+            crPfos.push_back(pPfo);
+        }
+    }
+
+    // Visualize the PFOs
+    PANDORA_MONITORING_API(SetEveDisplayParameters(pAlgorithm->GetPandora(), true, DETECTOR_VIEW_XZ, -1.f, 1.f, 1.f));
+    PANDORA_MONITORING_API(VisualizeParticleFlowObjects(pAlgorithm->GetPandora(), &crPfos, "CR slices", RED, false));
+    PANDORA_MONITORING_API(VisualizeParticleFlowObjects(pAlgorithm->GetPandora(), &nuPfos, "Neutrino slices", GREEN, false));
+    PANDORA_MONITORING_API(ViewEvent(pAlgorithm->GetPandora()));
+
+    //// END MONITORING
 }
 
 //------------------------------------------------------------------------------------------------------------------------------------------

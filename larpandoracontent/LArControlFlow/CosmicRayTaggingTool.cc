@@ -71,7 +71,7 @@ StatusCode CosmicRayTaggingTool::Initialize()
 
 //------------------------------------------------------------------------------------------------------------------------------------------
 
-void CosmicRayTaggingTool::FindAmbiguousPfos(const PfoList &parentCosmicRayPfos, PfoList &ambiguousPfos, const MasterAlgorithm *const /*pAlgorithm*/)
+void CosmicRayTaggingTool::FindAmbiguousPfos(const PfoList &parentCosmicRayPfos, PfoList &ambiguousPfos, const MasterAlgorithm *const pAlgorithm)
 {
     if (this->GetPandora().GetSettings()->ShouldDisplayAlgorithmInfo())
         std::cout << "----> Running Algorithm Tool: " << this->GetInstanceName() << ", " << this->GetType() << std::endl;
@@ -134,6 +134,30 @@ void CosmicRayTaggingTool::FindAmbiguousPfos(const PfoList &parentCosmicRayPfos,
         if (!pfoToIsLikelyCRMuonMap.at(pPfo))
             ambiguousPfos.push_back(pPfo);
     }
+
+    //// BEGIN MONITORING
+
+    // Split up the input list of PFOs into those that have and haven't been tagged as a cosmic-ray
+    PfoList clearCosmicPfos, remainingPfos;
+    for (const ParticleFlowObject *const pPfo : parentCosmicRayPfos)
+    {
+        if (pfoToIsLikelyCRMuonMap.at(pPfo))
+        {
+            clearCosmicPfos.push_back(pPfo);
+        }
+        else
+        {
+            remainingPfos.push_back(pPfo);
+        }
+    }
+
+    // Visualize the PFOs
+    PANDORA_MONITORING_API(SetEveDisplayParameters(pAlgorithm->GetPandora(), true, DETECTOR_VIEW_XZ, -1.f, 1.f, 1.f));
+    PANDORA_MONITORING_API(VisualizeParticleFlowObjects(pAlgorithm->GetPandora(), &clearCosmicPfos, "CR tagged", RED, false));
+    PANDORA_MONITORING_API(VisualizeParticleFlowObjects(pAlgorithm->GetPandora(), &remainingPfos, "Remaining", GRAY, false));
+    PANDORA_MONITORING_API(ViewEvent(pAlgorithm->GetPandora()));
+
+    //// END MONITORING
 }
 
 //------------------------------------------------------------------------------------------------------------------------------------------
